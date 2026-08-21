@@ -13,6 +13,7 @@ const express = require("express");
 const router = express.Router();
 const pool = require("../db");
 const { requireAdmin } = require("../middleware/requireAuth");
+const { sendDepartedEmail } = require("../email");
 
 function toClientShape(row) {
     return {
@@ -66,6 +67,35 @@ router.post("/", requireAdmin, async (req, res) => {
         );
 
         const full = await pool.query(SELECT_WITH_REFERENCE + " WHERE tracking_events.id = $1", [insertResult.rows[0].id]);
+
+        // "Departed" is the one event that specifically triggers its
+        // own email — this is the moment a customer actually wants
+        // to know their bus is genuinely moving, not just that some
+        // internal status field changed.
+        if (icon === "departed") {
+            const passengerResult = await pool.query(
+                `SELECT pb.passenger_name, pb.passenger_email,
+                        r.from_city, r.to_city, term.name AS terminal_name
+                 FROM passenger_bookings pb
+                 JOIN bookings b ON b.id = pb.booking_id
+                 JOIN trips t ON t.id = pb.trip_id
+                 JOIN routes r ON r.id = t.route_id
+                 JOIN terminals term ON term.id = pb.terminal_id
+                 WHERE b.id = $1`,
+                [bookingResult.rows[0].id]
+            );
+
+            if (passengerResult.rows.length > 0) {
+                const p = passengerResult.rows[0];
+                sendDepartedEmail(p.passenger_email, {
+                    passengerName: p.passenger_name,
+                    reference: reference.toUpperCase(),
+                    route: `${p.from_city} → ${p.to_city}`,
+                    departedTime: time
+                });
+            }
+        }
+
         res.status(201).json(toClientShape(full.rows[0]));
     } catch (err) {
         console.error("POST /api/events failed:", err);
