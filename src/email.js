@@ -32,13 +32,13 @@ async function send(to, subject, html) {
 
         if (result.error) {
             console.error(`Email to ${to} failed:`, result.error.message);
-            return false;
+            return { success: false, error: result.error.message };
         }
 
-        return true;
+        return { success: true, error: null };
     } catch (err) {
         console.error(`Email to ${to} failed:`, err.message);
-        return false;
+        return { success: false, error: err.message };
     }
 }
 
