@@ -21,6 +21,7 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const pool = require("../db");
 const { requireAuth } = require("../middleware/requireAuth");
+const { sendVerificationEmail } = require("../email");
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const SALT_ROUNDS = 10;
@@ -84,10 +85,18 @@ router.post("/signup", async (req, res) => {
 
         await client.query("COMMIT");
 
+        // Try to actually email the code — only fall back to showing
+        // it in the response if that fails, so a working email
+        // service means the code is never exposed to anyone but the
+        // real inbox it was sent to.
+        const emailResult = await sendVerificationEmail(email.toLowerCase(), code);
+
         res.status(201).json({
-            message: "Account created. Check your email for a verification code.",
+            message: emailResult.success
+                ? "Account created. Check your email for a verification code."
+                : "Account created, but the verification email couldn't be sent — here's your code instead.",
             userId: userResult.rows[0].id,
-            _devCode: code // REMOVE ONCE EMAIL IS WIRED UP — see note at top of file
+            ...(emailResult.success ? {} : { _devCode: code, _emailError: emailResult.error })
         });
     } catch (err) {
         await client.query("ROLLBACK");
@@ -131,7 +140,12 @@ router.post("/resend-code", async (req, res) => {
             [userResult.rows[0].id, email.toLowerCase(), code, expiresAt]
         );
 
-        res.json({ message: "New code generated.", _devCode: code });
+        const emailResult = await sendVerificationEmail(email.toLowerCase(), code);
+
+        res.json({
+            message: emailResult.success ? "New code sent to your email." : "Couldn't send the email — here's your code instead.",
+            ...(emailResult.success ? {} : { _devCode: code, _emailError: emailResult.error })
+        });
     } catch (err) {
         console.error("POST /api/auth/resend-code failed:", err);
         res.status(500).json({ error: "Couldn't resend the code." });
