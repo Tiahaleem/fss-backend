@@ -11,6 +11,7 @@ const express = require("express");
 const router = express.Router();
 const pool = require("../db");
 const { requireAuth, requireAdmin, optionalAuth } = require("../middleware/requireAuth");
+const { sendPassengerReceiptEmail, sendParcelReceiptEmail } = require("../email");
 
 function generateReference(prefix) {
     const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -42,7 +43,7 @@ router.post("/passenger", optionalAuth, async (req, res) => {
 
         // Look up the trip + its route's price, to know what to charge
         const tripResult = await client.query(
-            `SELECT trips.id, routes.price_kobo
+            `SELECT trips.id, routes.price_kobo, routes.from_city, routes.to_city
              FROM trips JOIN routes ON routes.id = trips.route_id
              WHERE trips.id = $1`,
             [tripId]
@@ -113,7 +114,18 @@ router.post("/passenger", optionalAuth, async (req, res) => {
 
         await client.query("COMMIT");
 
-        res.status(201).json({ reference, bookingId, priceKobo: totalPriceKobo, seatCount: seatNumbers.length });
+        // Send the receipt AFTER commit — if the email fails for any
+        // reason, the real booking (already saved) isn't affected.
+        const emailResult = await sendPassengerReceiptEmail(passengerEmail, {
+            passengerName,
+            reference,
+            route: `${tripResult.rows[0].from_city} → ${tripResult.rows[0].to_city}`,
+            price: `₦${(totalPriceKobo / 100).toLocaleString()}`,
+            seatNumbers,
+            pickupTerminal: (await client.query("SELECT name FROM terminals WHERE id = $1", [terminalId])).rows[0]?.name || "your pickup terminal"
+        });
+
+        res.status(201).json({ reference, bookingId, priceKobo: totalPriceKobo, seatCount: seatNumbers.length, emailResult });
     } catch (err) {
         await client.query("ROLLBACK");
         console.error("POST /api/bookings/passenger failed:", err);
@@ -131,11 +143,11 @@ router.post("/parcel", optionalAuth, async (req, res) => {
 
     try {
         const {
-            fromCity, toCity, senderName, senderPhone,
+            fromCity, toCity, senderName, senderPhone, senderEmail,
             receiverName, receiverPhone, description, weightKg, declaredValueKobo, priceKobo
         } = req.body;
 
-        if (!fromCity || !toCity || !senderName || !senderPhone || !receiverName || !receiverPhone || !description || !weightKg) {
+        if (!fromCity || !toCity || !senderName || !senderPhone || !senderEmail || !receiverName || !receiverPhone || !description || !weightKg) {
             return res.status(400).json({ error: "Missing required parcel details." });
         }
 
@@ -153,9 +165,9 @@ router.post("/parcel", optionalAuth, async (req, res) => {
 
         await client.query(
             `INSERT INTO parcel_bookings
-                (booking_id, from_city, to_city, sender_name, sender_phone, receiver_name, receiver_phone, description, weight_kg, declared_value_kobo)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-            [bookingId, fromCity, toCity, senderName, senderPhone, receiverName, receiverPhone, description, weightKg, declaredValueKobo || 0]
+                (booking_id, from_city, to_city, sender_name, sender_phone, sender_email, receiver_name, receiver_phone, description, weight_kg, declared_value_kobo)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [bookingId, fromCity, toCity, senderName, senderPhone, senderEmail, receiverName, receiverPhone, description, weightKg, declaredValueKobo || 0]
         );
 
         await client.query(
@@ -166,7 +178,15 @@ router.post("/parcel", optionalAuth, async (req, res) => {
 
         await client.query("COMMIT");
 
-        res.status(201).json({ reference, bookingId });
+        const emailResult = await sendParcelReceiptEmail(senderEmail, {
+            senderName,
+            reference,
+            route: `${fromCity} → ${toCity}`,
+            price: `₦${((priceKobo || 0) / 100).toLocaleString()}`,
+            receiverName
+        });
+
+        res.status(201).json({ reference, bookingId, emailResult });
     } catch (err) {
         await client.query("ROLLBACK");
         console.error("POST /api/bookings/parcel failed:", err);
