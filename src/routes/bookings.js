@@ -10,189 +10,37 @@
 const express = require("express");
 const router = express.Router();
 const pool = require("../db");
-const { requireAuth, requireAdmin, optionalAuth } = require("../middleware/requireAuth");
-const { sendPassengerReceiptEmail, sendParcelReceiptEmail } = require("../email");
-
-function generateReference(prefix) {
-    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    let code = prefix + "-";
-    for (let i = 0; i < 6; i++) {
-        code += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return code;
-}
+const { requireAuth, requireAdmin } = require("../middleware/requireAuth");
+const { createPassengerBooking, createParcelBooking } = require("../bookingCreators");
 
 // =========================
-// POST /api/bookings/passenger
+// POST /api/bookings/passenger — ADMIN ONLY now
 // =========================
-router.post("/passenger", optionalAuth, async (req, res) => {
-    const client = await pool.connect();
-
+// Real customers no longer hit this directly — they go through
+// /api/payments/initialize-passenger, which only creates the actual
+// booking after Paystack confirms the payment genuinely succeeded.
+// This stays open for admin use (manual/support bookings, e.g. a
+// phone booking that needs entering by hand).
+router.post("/passenger", requireAdmin, async (req, res) => {
     try {
-        const {
-            tripId, terminalId, seatNumbers, sessionId,
-            passengerName, passengerEmail, passengerPhone, travelDate
-        } = req.body;
-
-        if (!tripId || !terminalId || !Array.isArray(seatNumbers) || seatNumbers.length === 0 ||
-            !passengerName || !passengerEmail || !passengerPhone || !travelDate) {
-            return res.status(400).json({ error: "Missing required booking details — seatNumbers must be a non-empty array." });
-        }
-
-        await client.query("BEGIN");
-
-        // Look up the trip + its route's price, to know what to charge
-        const tripResult = await client.query(
-            `SELECT trips.id, routes.price_kobo, routes.from_city, routes.to_city
-             FROM trips JOIN routes ON routes.id = trips.route_id
-             WHERE trips.id = $1`,
-            [tripId]
-        );
-
-        if (tripResult.rows.length === 0) {
-            await client.query("ROLLBACK");
-            return res.status(404).json({ error: "That trip doesn't exist." });
-        }
-
-        // Price is per seat — the total charged is per-seat price × how many seats
-        const pricePerSeatKobo = tripResult.rows[0].price_kobo;
-        const totalPriceKobo = pricePerSeatKobo * seatNumbers.length;
-        const reference = generateReference("FSS");
-
-        // Create the shared booking row (covers the whole group, however many seats)
-        const bookingResult = await client.query(
-            `INSERT INTO bookings (reference, type, owner_id, price_kobo)
-             VALUES ($1, 'passenger', $2, $3)
-             RETURNING id, created_at`,
-            [reference, req.user ? req.user.id : null, totalPriceKobo]
-        );
-        const bookingId = bookingResult.rows[0].id;
-
-        // Create the passenger-specific details — one row for the
-        // whole group, not one per seat
-        await client.query(
-            `INSERT INTO passenger_bookings
-                (booking_id, trip_id, terminal_id, passenger_name, passenger_email, passenger_phone, travel_date)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [bookingId, tripId, terminalId, passengerName, passengerEmail, passengerPhone, travelDate]
-        );
-
-        // Finalize EVERY seat in the group as booked, in the same
-        // transaction — either all of them go through, or none do.
-        // If any single seat was grabbed by someone else in the
-        // meantime, the whole booking rolls back rather than leaving
-        // a group with some seats confirmed and others missing.
-        for (const seatNumber of seatNumbers) {
-            await client.query(
-                `INSERT INTO seat_holds (trip_id, seat_number, status, booking_id, expires_at)
-                 VALUES ($1, $2, 'booked', $3, NULL)
-                 ON CONFLICT (trip_id, seat_number)
-                 DO UPDATE SET status = 'booked', booking_id = $3, held_by_session = NULL, expires_at = NULL
-                 WHERE seat_holds.status = 'held' AND seat_holds.held_by_session = $4`,
-                [tripId, seatNumber, bookingId, sessionId || null]
-            );
-
-            const seatCheck = await client.query(
-                `SELECT booking_id FROM seat_holds WHERE trip_id = $1 AND seat_number = $2`,
-                [tripId, seatNumber]
-            );
-
-            if (!seatCheck.rows[0] || seatCheck.rows[0].booking_id !== bookingId) {
-                await client.query("ROLLBACK");
-                return res.status(409).json({ error: `Seat ${seatNumber} was just taken by someone else. Please pick again.` });
-            }
-        }
-
-        // Starter tracking events, same two steps as before
-        await client.query(
-            `INSERT INTO tracking_events (booking_id, sort_order, title, event_time, status, icon)
-             VALUES
-                ($1, 1, 'Booking confirmed', to_char(now(), 'HH24:MI'), 'completed', 'boarding'),
-                ($1, 2, 'Awaiting boarding', to_char(now(), 'HH24:MI'), 'active', 'location')`,
-            [bookingId]
-        );
-
-        await client.query("COMMIT");
-
-        // Send the receipt AFTER commit — if the email fails for any
-        // reason, the real booking (already saved) isn't affected.
-        const emailResult = await sendPassengerReceiptEmail(passengerEmail, {
-            passengerName,
-            reference,
-            route: `${tripResult.rows[0].from_city} → ${tripResult.rows[0].to_city}`,
-            price: `₦${(totalPriceKobo / 100).toLocaleString()}`,
-            seatNumbers,
-            pickupTerminal: (await client.query("SELECT name FROM terminals WHERE id = $1", [terminalId])).rows[0]?.name || "your pickup terminal"
-        });
-
-        res.status(201).json({ reference, bookingId, priceKobo: totalPriceKobo, seatCount: seatNumbers.length, emailResult });
+        const result = await createPassengerBooking(req.body);
+        res.status(201).json(result);
     } catch (err) {
-        await client.query("ROLLBACK");
-        console.error("POST /api/bookings/passenger failed:", err);
-        res.status(500).json({ error: "Couldn't create that booking." });
-    } finally {
-        client.release();
+        console.error("POST /api/bookings/passenger failed:", err.message);
+        res.status(err.status || 500).json({ error: err.message || "Couldn't create that booking." });
     }
 });
 
 // =========================
-// POST /api/bookings/parcel
+// POST /api/bookings/parcel — ADMIN ONLY now
 // =========================
-router.post("/parcel", optionalAuth, async (req, res) => {
-    const client = await pool.connect();
-
+router.post("/parcel", requireAdmin, async (req, res) => {
     try {
-        const {
-            fromCity, toCity, senderName, senderPhone, senderEmail,
-            receiverName, receiverPhone, description, weightKg, declaredValueKobo, priceKobo
-        } = req.body;
-
-        if (!fromCity || !toCity || !senderName || !senderPhone || !senderEmail || !receiverName || !receiverPhone || !description || !weightKg) {
-            return res.status(400).json({ error: "Missing required parcel details." });
-        }
-
-        await client.query("BEGIN");
-
-        const reference = generateReference("PCL");
-
-        const bookingResult = await client.query(
-            `INSERT INTO bookings (reference, type, owner_id, price_kobo)
-             VALUES ($1, 'parcel', $2, $3)
-             RETURNING id`,
-            [reference, req.user ? req.user.id : null, priceKobo || 0]
-        );
-        const bookingId = bookingResult.rows[0].id;
-
-        await client.query(
-            `INSERT INTO parcel_bookings
-                (booking_id, from_city, to_city, sender_name, sender_phone, sender_email, receiver_name, receiver_phone, description, weight_kg, declared_value_kobo)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-            [bookingId, fromCity, toCity, senderName, senderPhone, senderEmail, receiverName, receiverPhone, description, weightKg, declaredValueKobo || 0]
-        );
-
-        await client.query(
-            `INSERT INTO tracking_events (booking_id, sort_order, title, event_time, status, icon)
-             VALUES ($1, 1, 'Pickup scheduled', to_char(now(), 'HH24:MI'), 'active', 'boarding')`,
-            [bookingId]
-        );
-
-        await client.query("COMMIT");
-
-        const emailResult = await sendParcelReceiptEmail(senderEmail, {
-            senderName,
-            reference,
-            route: `${fromCity} → ${toCity}`,
-            price: `₦${((priceKobo || 0) / 100).toLocaleString()}`,
-            receiverName
-        });
-
-        res.status(201).json({ reference, bookingId, emailResult });
+        const result = await createParcelBooking(req.body);
+        res.status(201).json(result);
     } catch (err) {
-        await client.query("ROLLBACK");
-        console.error("POST /api/bookings/parcel failed:", err);
-        res.status(500).json({ error: "Couldn't create that booking." });
-    } finally {
-        client.release();
+        console.error("POST /api/bookings/parcel failed:", err.message);
+        res.status(err.status || 500).json({ error: err.message || "Couldn't create that booking." });
     }
 });
 
