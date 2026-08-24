@@ -35,7 +35,8 @@ CREATE TABLE users (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name            VARCHAR(120)    NOT NULL,
     email           VARCHAR(255)    NOT NULL UNIQUE,
-    password_hash   VARCHAR(255)    NOT NULL, -- bcrypt hash, NEVER plaintext
+    password_hash   VARCHAR(255), -- bcrypt hash, NEVER plaintext. NULL for Google-only accounts (no password set).
+    google_id       VARCHAR(255)    UNIQUE, -- links to a Google account, for "Sign in with Google"
     role            VARCHAR(20)     NOT NULL DEFAULT 'customer'
                         CHECK (role IN ('customer', 'admin')),
     email_verified  BOOLEAN         NOT NULL DEFAULT false,
@@ -214,6 +215,7 @@ CREATE TABLE parcel_bookings (
     to_city         VARCHAR(80)  NOT NULL,
     sender_name     VARCHAR(120) NOT NULL,
     sender_phone    VARCHAR(30)  NOT NULL,
+    sender_email    VARCHAR(255) NOT NULL,
     receiver_name   VARCHAR(120) NOT NULL,
     receiver_phone  VARCHAR(30)  NOT NULL,
     description     TEXT         NOT NULL,
