@@ -173,6 +173,7 @@ CREATE INDEX idx_bookings_reference ON bookings(reference);
 CREATE TABLE seat_holds (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     trip_id         UUID NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+    travel_date     DATE NOT NULL, -- which calendar day this hold/booking is for — the SAME trip has its own independent seat map per day
     seat_number     VARCHAR(4) NOT NULL,
     status          VARCHAR(10) NOT NULL
                         CHECK (status IN ('held', 'booked')),
@@ -181,10 +182,11 @@ CREATE TABLE seat_holds (
     expires_at      TIMESTAMPTZ, -- NULL once status = 'booked' (no expiry on a real booking)
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-    UNIQUE (trip_id, seat_number)
+    UNIQUE (trip_id, travel_date, seat_number)
 );
 
 CREATE INDEX idx_seat_holds_trip_id ON seat_holds(trip_id);
+CREATE INDEX idx_seat_holds_trip_date ON seat_holds(trip_id, travel_date);
 
 -- Note: a scheduled job (cron) should periodically DELETE rows where
 -- status = 'held' AND expires_at < now() — same "release abandoned
