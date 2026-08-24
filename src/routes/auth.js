@@ -19,12 +19,15 @@ const express = require("express");
 const router = express.Router();
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const { OAuth2Client } = require("google-auth-library");
 const pool = require("../db");
 const { requireAuth } = require("../middleware/requireAuth");
 const { sendVerificationEmail } = require("../email");
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const SALT_ROUNDS = 10;
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 function generateCode() {
     return String(Math.floor(100000 + Math.random() * 900000));
@@ -214,6 +217,11 @@ router.post("/login", async (req, res) => {
         }
 
         const user = result.rows[0];
+
+        if (!user.password_hash) {
+            return res.status(401).json({ error: "This account uses Google Sign-In — use the Google button instead of a password." });
+        }
+
         const passwordMatches = await bcrypt.compare(password, user.password_hash);
 
         if (!passwordMatches) {
@@ -312,6 +320,69 @@ router.put("/me", requireAuth, async (req, res) => {
         res.status(500).json({ error: "Couldn't update your account." });
     } finally {
         client.release();
+    }
+});
+
+// =========================
+// POST /api/auth/google
+// =========================
+// The frontend sends the ID token Google's own Sign-In button
+// produced. This verifies it DIRECTLY with Google's servers — never
+// trusting the token's contents at face value, since anyone could
+// send a fake one otherwise. Only after Google itself confirms the
+// token is genuine does this look at the email/name inside it.
+router.post("/google", async (req, res) => {
+    try {
+        const { credential } = req.body;
+
+        if (!credential) {
+            return res.status(400).json({ error: "Missing Google credential." });
+        }
+
+        const ticket = await googleClient.verifyIdToken({
+            idToken: credential,
+            audience: GOOGLE_CLIENT_ID
+        });
+
+        const payload = ticket.getPayload();
+
+        if (!payload.email_verified) {
+            return res.status(401).json({ error: "Your Google email isn't verified." });
+        }
+
+        const email = payload.email.toLowerCase();
+        const name = payload.name || email.split("@")[0];
+        const googleId = payload.sub;
+
+        const existing = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+        let user;
+
+        if (existing.rows.length > 0) {
+            // Already have an account with this email — sign them in.
+            // Also mark it verified and link the Google ID, since
+            // Google just re-confirmed this email is real and theirs.
+            const updateResult = await pool.query(
+                "UPDATE users SET email_verified = true, google_id = $1 WHERE id = $2 RETURNING *",
+                [googleId, existing.rows[0].id]
+            );
+            user = updateResult.rows[0];
+        } else {
+            // Brand new account — no password, since Google is doing
+            // the authenticating from now on for this account.
+            const insertResult = await pool.query(
+                `INSERT INTO users (name, email, password_hash, google_id, role, email_verified)
+                 VALUES ($1, $2, NULL, $3, 'customer', true)
+                 RETURNING *`,
+                [name, email, googleId]
+            );
+            user = insertResult.rows[0];
+        }
+
+        const token = signToken(user);
+        res.json({ token, user: toClientShape(user) });
+    } catch (err) {
+        console.error("POST /api/auth/google failed:", err.message);
+        res.status(401).json({ error: "Couldn't verify that Google sign-in." });
     }
 });
 
