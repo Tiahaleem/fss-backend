@@ -71,17 +71,17 @@ async function createPassengerBooking({
 
         for (const seatNumber of seatNumbers) {
             await client.query(
-                `INSERT INTO seat_holds (trip_id, seat_number, status, booking_id, expires_at)
-                 VALUES ($1, $2, 'booked', $3, NULL)
-                 ON CONFLICT (trip_id, seat_number)
-                 DO UPDATE SET status = 'booked', booking_id = $3, held_by_session = NULL, expires_at = NULL
-                 WHERE seat_holds.status = 'held' AND seat_holds.held_by_session = $4`,
-                [tripId, seatNumber, bookingId, sessionId || null]
+                `INSERT INTO seat_holds (trip_id, travel_date, seat_number, status, booking_id, expires_at)
+                 VALUES ($1, $2, $3, 'booked', $4, NULL)
+                 ON CONFLICT (trip_id, travel_date, seat_number)
+                 DO UPDATE SET status = 'booked', booking_id = $4, held_by_session = NULL, expires_at = NULL
+                 WHERE seat_holds.status = 'held' AND seat_holds.held_by_session = $5`,
+                [tripId, travelDate, seatNumber, bookingId, sessionId || null]
             );
 
             const seatCheck = await client.query(
-                `SELECT booking_id FROM seat_holds WHERE trip_id = $1 AND seat_number = $2`,
-                [tripId, seatNumber]
+                `SELECT booking_id FROM seat_holds WHERE trip_id = $1 AND travel_date = $2 AND seat_number = $3`,
+                [tripId, travelDate, seatNumber]
             );
 
             if (!seatCheck.rows[0] || seatCheck.rows[0].booking_id !== bookingId) {
