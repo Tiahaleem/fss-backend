@@ -86,7 +86,7 @@ router.get("/mine", requireAuth, async (req, res) => {
     try {
         const result = await pool.query(
             `SELECT
-                b.reference, b.type, b.price_kobo, b.created_at,
+                b.reference, b.type, b.price_kobo, b.created_at, b.status,
                 (SELECT string_agg(seat_number, ', ' ORDER BY seat_number) FROM seat_holds WHERE booking_id = b.id) AS seat_numbers,
                 pb.travel_date,
                 r.from_city AS trip_from, r.to_city AS trip_to,
@@ -118,7 +118,7 @@ router.get("/", requireAdmin, async (req, res) => {
     try {
         const result = await pool.query(
             `SELECT
-                b.reference, b.type, b.price_kobo, b.created_at,
+                b.reference, b.type, b.price_kobo, b.created_at, b.status,
                 pb.passenger_name, pb.passenger_phone,
                 (SELECT string_agg(seat_number, ', ' ORDER BY seat_number) FROM seat_holds WHERE booking_id = b.id) AS seat_numbers,
                 pab.sender_name, pab.sender_phone, pab.receiver_name, pab.receiver_phone,
@@ -133,6 +133,108 @@ router.get("/", requireAdmin, async (req, res) => {
     } catch (err) {
         console.error("GET /api/bookings failed:", err);
         res.status(500).json({ error: "Couldn't load bookings." });
+    }
+});
+
+// =========================
+// POST /api/bookings/:reference/cancel
+// =========================
+// Works for either the customer who owns this booking, or an admin
+// (e.g. handling a phone request to cancel). Releases the seats back
+// to available (passenger bookings only) and marks the booking
+// cancelled — but does NOT touch the money. Refunding is a separate,
+// deliberate action below, since not every cancellation should
+// automatically trigger a real refund.
+router.post("/:reference/cancel", requireAuth, async (req, res) => {
+    const client = await pool.connect();
+
+    try {
+        const bookingResult = await client.query(
+            "SELECT * FROM bookings WHERE reference = $1",
+            [req.params.reference.toUpperCase()]
+        );
+
+        if (bookingResult.rows.length === 0) {
+            return res.status(404).json({ error: "Booking not found." });
+        }
+
+        const booking = bookingResult.rows[0];
+
+        const isOwner = booking.owner_id && booking.owner_id === req.user.id;
+        const isAdmin = req.user.role === "admin";
+
+        if (!isOwner && !isAdmin) {
+            return res.status(403).json({ error: "You can only cancel your own bookings." });
+        }
+
+        if (booking.status !== "confirmed") {
+            return res.status(400).json({ error: `This booking is already ${booking.status}.` });
+        }
+
+        await client.query("BEGIN");
+
+        // For a passenger booking, actually free the seats back up —
+        // deleting the seat_holds rows makes them immediately
+        // available for someone else to select.
+        if (booking.type === "passenger") {
+            await client.query("DELETE FROM seat_holds WHERE booking_id = $1", [booking.id]);
+        }
+
+        await client.query("UPDATE bookings SET status = 'cancelled' WHERE id = $1", [booking.id]);
+
+        await client.query("COMMIT");
+
+        res.json({ reference: booking.reference, status: "cancelled" });
+    } catch (err) {
+        await client.query("ROLLBACK");
+        console.error("POST /api/bookings/:reference/cancel failed:", err.message);
+        res.status(500).json({ error: "Couldn't cancel that booking." });
+    } finally {
+        client.release();
+    }
+});
+
+// =========================
+// POST /api/bookings/:reference/refund — ADMIN ONLY
+// =========================
+// Issues a REAL refund through Paystack, against the actual payment
+// that was made. Needs payment_reference to exist — a booking with
+// no stored payment reference (e.g. very old test data) can't be
+// refunded through Paystack and would need handling outside the system.
+router.post("/:reference/refund", requireAdmin, async (req, res) => {
+    try {
+        const bookingResult = await pool.query(
+            "SELECT * FROM bookings WHERE reference = $1",
+            [req.params.reference.toUpperCase()]
+        );
+
+        if (bookingResult.rows.length === 0) {
+            return res.status(404).json({ error: "Booking not found." });
+        }
+
+        const booking = bookingResult.rows[0];
+
+        if (booking.status === "refunded") {
+            return res.status(400).json({ error: "This booking has already been refunded." });
+        }
+
+        if (!booking.payment_reference) {
+            return res.status(400).json({ error: "No payment reference on file for this booking — it can't be refunded through Paystack automatically." });
+        }
+
+        // The actual real refund call — Paystack reverses the charge
+        // on the customer's card/account.
+        await paystackRequest("/refund", {
+            method: "POST",
+            body: JSON.stringify({ transaction: booking.payment_reference })
+        });
+
+        await pool.query("UPDATE bookings SET status = 'refunded' WHERE id = $1", [booking.id]);
+
+        res.json({ reference: booking.reference, status: "refunded" });
+    } catch (err) {
+        console.error("POST /api/bookings/:reference/refund failed:", err.message);
+        res.status(err.status || 500).json({ error: err.message || "Couldn't process that refund." });
     }
 });
 
