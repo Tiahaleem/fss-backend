@@ -164,9 +164,42 @@ async function sendDepartedEmail(to, { passengerName, reference, route, departed
     return send(to, `You're on your way — ${reference}`, html);
 }
 
+async function sendDepartureReminderEmail(to, { passengerName, reference, route, departureTime, pickupTerminal, seatNumbers }) {
+    const html = wrapper(`
+<tr><td style="padding:32px 32px 0;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td style="background-color:#fff7e0; border-radius:12px; padding:20px 24px;">
+<p style="margin:0; color:#b38600; font-size:14px; font-weight:bold; letter-spacing:.5px;">DEPARTING SOON</p>
+<p style="margin:8px 0 0; color:#0f172a; font-size:22px; font-weight:bold;">${route} · ${departureTime}</p>
+</td></tr></table>
+</td></tr>
+<tr><td style="padding:28px 32px 0;">
+<p style="margin:0 0 6px; color:#0f172a; font-size:18px; font-weight:bold;">Almost time to go, ${passengerName}!</p>
+<p style="margin:0; color:#64748b; font-size:14px; line-height:1.6;">Your trip leaves in about 2 hours. A quick checklist before you head out:</p>
+</td></tr>
+<tr><td style="padding:20px 32px 0;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e7edf3; border-radius:12px;">
+<tr><td style="padding:16px 20px; border-bottom:1px solid #e7edf3;"><p style="margin:0; color:#64748b; font-size:13px;">Pickup Center</p><p style="margin:2px 0 0; color:#0f172a; font-size:15px; font-weight:bold;">${pickupTerminal}</p></td></tr>
+<tr><td style="padding:16px 20px; border-bottom:1px solid #e7edf3;"><p style="margin:0; color:#64748b; font-size:13px;">Seat${seatNumbers.length > 1 ? "s" : ""}</p><p style="margin:2px 0 0; color:#0f172a; font-size:15px; font-weight:bold;">${seatNumbers.join(", ")}</p></td></tr>
+<tr><td style="padding:16px 20px;"><p style="margin:0; color:#64748b; font-size:13px;">Reference</p><p style="margin:2px 0 0; color:#0f172a; font-size:15px; font-weight:bold;">${reference}</p></td></tr>
+</table>
+</td></tr>
+<tr><td style="padding:20px 32px 0;">
+<p style="margin:0; color:#64748b; font-size:13px; line-height:1.7;">Arrive at your pickup center 15–20 minutes early, and bring a valid ID.</p>
+</td></tr>
+<tr><td style="padding:28px 32px;" align="center">
+<table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="background-color:#08b6d6; border-radius:50px;">
+<a href="${SITE_URL}/track.html?ref=${encodeURIComponent(reference)}" style="display:inline-block; padding:14px 32px; color:#ffffff; font-size:14px; font-weight:bold; text-decoration:none;">View Your Booking</a>
+</td></tr></table>
+</td></tr>
+    `);
+
+    return send(to, `Departing soon — ${route} at ${departureTime}`, html);
+}
+
 module.exports = {
     sendVerificationEmail,
     sendPassengerReceiptEmail,
     sendParcelReceiptEmail,
-    sendDepartedEmail
+    sendDepartedEmail,
+    sendDepartureReminderEmail
 };
