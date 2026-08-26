@@ -244,9 +244,9 @@ CREATE TABLE tracking_events (
     title       VARCHAR(120) NOT NULL,
     event_time  VARCHAR(20)  NOT NULL, -- kept as display text ("18:15 (ETA)") to match the UI
     status      VARCHAR(10)  NOT NULL
-                    CHECK (status IN ('completed', 'active', 'pending')),
+                    CHECK (status IN ('completed', 'active', 'pending', 'cancelled')),
     icon        VARCHAR(20)  NOT NULL DEFAULT 'location'
-                    CHECK (icon IN ('boarding', 'departed', 'checkpoint', 'location', 'arrival', 'delivered')),
+                    CHECK (icon IN ('boarding', 'departed', 'checkpoint', 'location', 'arrival', 'delivered', 'cancelled')),
     created_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
