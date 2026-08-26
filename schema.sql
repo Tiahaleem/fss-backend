@@ -151,6 +151,9 @@ CREATE TABLE bookings (
                     CHECK (type IN ('parcel', 'passenger')),
     owner_id    UUID REFERENCES users(id), -- NULL for a guest booking (not signed in)
     price_kobo  BIGINT NOT NULL,
+    status      VARCHAR(20) NOT NULL DEFAULT 'confirmed'
+                    CHECK (status IN ('confirmed', 'cancelled', 'refunded')),
+    payment_reference VARCHAR(100), -- the real Paystack transaction reference — needed to actually issue a refund against this specific payment
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
