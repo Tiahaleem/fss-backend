@@ -12,6 +12,8 @@ const router = express.Router();
 const pool = require("../db");
 const { requireAuth, requireAdmin } = require("../middleware/requireAuth");
 const { createPassengerBooking, createParcelBooking } = require("../bookingCreators");
+const { paystackRequest } = require("../paystack");
+const { sendCancellationEmail, sendRefundEmail } = require("../email");
 
 // =========================
 // POST /api/bookings/passenger — ADMIN ONLY now
@@ -205,6 +207,38 @@ router.post("/:reference/cancel", requireAuth, async (req, res) => {
 
         await client.query("COMMIT");
 
+        // Send the notification AFTER commit — a failed email should
+        // never undo a cancellation that already genuinely happened.
+        try {
+            let contactEmail, contactName, description;
+
+            if (booking.type === "passenger") {
+                const details = await pool.query(
+                    `SELECT pb.passenger_name, pb.passenger_email, r.from_city, r.to_city
+                     FROM passenger_bookings pb
+                     JOIN trips t ON t.id = pb.trip_id
+                     JOIN routes r ON r.id = t.route_id
+                     WHERE pb.booking_id = $1`,
+                    [booking.id]
+                );
+                contactEmail = details.rows[0].passenger_email;
+                contactName = details.rows[0].passenger_name;
+                description = `${details.rows[0].from_city} → ${details.rows[0].to_city} trip`;
+            } else {
+                const details = await pool.query(
+                    "SELECT sender_name, sender_email, from_city, to_city FROM parcel_bookings WHERE booking_id = $1",
+                    [booking.id]
+                );
+                contactEmail = details.rows[0].sender_email;
+                contactName = details.rows[0].sender_name;
+                description = `${details.rows[0].from_city} → ${details.rows[0].to_city} parcel`;
+            }
+
+            await sendCancellationEmail(contactEmail, { name: contactName, reference: booking.reference, description });
+        } catch (emailErr) {
+            console.error("Cancellation email failed:", emailErr.message);
+        }
+
         res.json({ reference: booking.reference, status: "cancelled" });
     } catch (err) {
         await client.query("ROLLBACK");
@@ -251,6 +285,28 @@ router.post("/:reference/refund", requireAdmin, async (req, res) => {
         });
 
         await pool.query("UPDATE bookings SET status = 'refunded' WHERE id = $1", [booking.id]);
+
+        try {
+            let contactEmail, contactName;
+
+            if (booking.type === "passenger") {
+                const details = await pool.query("SELECT passenger_name, passenger_email FROM passenger_bookings WHERE booking_id = $1", [booking.id]);
+                contactEmail = details.rows[0].passenger_email;
+                contactName = details.rows[0].passenger_name;
+            } else {
+                const details = await pool.query("SELECT sender_name, sender_email FROM parcel_bookings WHERE booking_id = $1", [booking.id]);
+                contactEmail = details.rows[0].sender_email;
+                contactName = details.rows[0].sender_name;
+            }
+
+            await sendRefundEmail(contactEmail, {
+                name: contactName,
+                reference: booking.reference,
+                amount: `₦${(Number(booking.price_kobo) / 100).toLocaleString()}`
+            });
+        } catch (emailErr) {
+            console.error("Refund email failed:", emailErr.message);
+        }
 
         res.json({ reference: booking.reference, status: "refunded" });
     } catch (err) {
