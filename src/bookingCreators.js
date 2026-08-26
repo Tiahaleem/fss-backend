@@ -22,7 +22,7 @@ function generateReference(prefix) {
 
 async function createPassengerBooking({
     tripId, terminalId, seatNumbers, sessionId,
-    passengerName, passengerEmail, passengerPhone, travelDate, ownerId
+    passengerName, passengerEmail, passengerPhone, travelDate, ownerId, paymentReference
 }) {
     if (!tripId || !terminalId || !Array.isArray(seatNumbers) || seatNumbers.length === 0 ||
         !passengerName || !passengerEmail || !passengerPhone || !travelDate) {
@@ -55,10 +55,10 @@ async function createPassengerBooking({
         const reference = generateReference("FSS");
 
         const bookingResult = await client.query(
-            `INSERT INTO bookings (reference, type, owner_id, price_kobo)
-             VALUES ($1, 'passenger', $2, $3)
+            `INSERT INTO bookings (reference, type, owner_id, price_kobo, payment_reference)
+             VALUES ($1, 'passenger', $2, $3, $4)
              RETURNING id, created_at`,
-            [reference, ownerId || null, totalPriceKobo]
+            [reference, ownerId || null, totalPriceKobo, paymentReference || null]
         );
         const bookingId = bookingResult.rows[0].id;
 
@@ -124,7 +124,7 @@ async function createPassengerBooking({
 
 async function createParcelBooking({
     fromCity, toCity, senderName, senderPhone, senderEmail,
-    receiverName, receiverPhone, description, weightKg, declaredValueKobo, priceKobo, ownerId
+    receiverName, receiverPhone, description, weightKg, declaredValueKobo, priceKobo, ownerId, paymentReference
 }) {
     if (!fromCity || !toCity || !senderName || !senderPhone || !senderEmail || !receiverName || !receiverPhone || !description || !weightKg) {
         const err = new Error("Missing required parcel details.");
@@ -140,10 +140,10 @@ async function createParcelBooking({
         const reference = generateReference("PCL");
 
         const bookingResult = await client.query(
-            `INSERT INTO bookings (reference, type, owner_id, price_kobo)
-             VALUES ($1, 'parcel', $2, $3)
+            `INSERT INTO bookings (reference, type, owner_id, price_kobo, payment_reference)
+             VALUES ($1, 'parcel', $2, $3, $4)
              RETURNING id`,
-            [reference, ownerId || null, priceKobo || 0]
+            [reference, ownerId || null, priceKobo || 0, paymentReference || null]
         );
         const bookingId = bookingResult.rows[0].id;
 
