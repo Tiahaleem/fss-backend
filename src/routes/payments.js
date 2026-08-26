@@ -1,3 +1,4 @@
+const { paymentLimiter } = require("../rateLimiters");
 // =========================
 // PAYMENTS API (Paystack)
 // =========================
@@ -48,7 +49,7 @@ async function paystackRequest(path, options = {}) {
 // =========================
 // POST /api/payments/initialize-passenger
 // =========================
-router.post("/initialize-passenger", optionalAuth, async (req, res) => {
+router.post("/initialize-passenger", paymentLimiter, optionalAuth, async (req, res) => {
     try {
         const { tripId, terminalId, seatNumbers, sessionId, passengerName, passengerEmail, passengerPhone, travelDate } = req.body;
 
@@ -97,7 +98,7 @@ router.post("/initialize-passenger", optionalAuth, async (req, res) => {
 // =========================
 // POST /api/payments/initialize-parcel
 // =========================
-router.post("/initialize-parcel", optionalAuth, async (req, res) => {
+router.post("/initialize-parcel", paymentLimiter, optionalAuth, async (req, res) => {
     try {
         const {
             fromCity, toCity, senderName, senderPhone, senderEmail,
