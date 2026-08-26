@@ -196,10 +196,56 @@ async function sendDepartureReminderEmail(to, { passengerName, reference, route,
     return send(to, `Departing soon — ${route} at ${departureTime}`, html);
 }
 
+async function sendCancellationEmail(to, { name, reference, description }) {
+    const html = wrapper(`
+<tr><td style="padding:32px 32px 0;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td style="background-color:#f1f5f9; border-radius:12px; padding:20px 24px;">
+<p style="margin:0; color:#64748b; font-size:14px; font-weight:bold; letter-spacing:.5px;">BOOKING CANCELLED</p>
+<p style="margin:8px 0 0; color:#0f172a; font-size:22px; font-weight:bold;">${reference}</p>
+</td></tr></table>
+</td></tr>
+<tr><td style="padding:28px 32px 0;">
+<p style="margin:0 0 6px; color:#0f172a; font-size:18px; font-weight:bold;">This booking has been cancelled, ${name}.</p>
+<p style="margin:0; color:#64748b; font-size:14px; line-height:1.6;">Your ${description} (${reference}) is no longer active. If you didn't request this, or you were expecting a refund, please get in touch.</p>
+</td></tr>
+<tr><td style="padding:28px 32px;" align="center">
+<table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="background-color:#08b6d6; border-radius:50px;">
+<a href="${SITE_URL}/contact.html" style="display:inline-block; padding:14px 32px; color:#ffffff; font-size:14px; font-weight:bold; text-decoration:none;">Contact Support</a>
+</td></tr></table>
+</td></tr>
+    `);
+
+    return send(to, `Booking cancelled — ${reference}`, html);
+}
+
+async function sendRefundEmail(to, { name, reference, amount }) {
+    const html = wrapper(`
+<tr><td style="padding:32px 32px 0;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td style="background-color:#dcfce7; border-radius:12px; padding:20px 24px;">
+<p style="margin:0; color:#16a34a; font-size:14px; font-weight:bold; letter-spacing:.5px;">REFUND PROCESSED</p>
+<p style="margin:8px 0 0; color:#0f172a; font-size:22px; font-weight:bold;">${amount}</p>
+</td></tr></table>
+</td></tr>
+<tr><td style="padding:28px 32px 0;">
+<p style="margin:0 0 6px; color:#0f172a; font-size:18px; font-weight:bold;">Your refund is on its way, ${name}.</p>
+<p style="margin:0; color:#64748b; font-size:14px; line-height:1.6;">We've processed a refund of ${amount} for booking ${reference}. It can take a few business days to reflect on your card or account, depending on your bank.</p>
+</td></tr>
+<tr><td style="padding:28px 32px;" align="center">
+<table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="background-color:#08b6d6; border-radius:50px;">
+<a href="${SITE_URL}/contact.html" style="display:inline-block; padding:14px 32px; color:#ffffff; font-size:14px; font-weight:bold; text-decoration:none;">Contact Support</a>
+</td></tr></table>
+</td></tr>
+    `);
+
+    return send(to, `Refund processed — ${reference}`, html);
+}
+
 module.exports = {
     sendVerificationEmail,
     sendPassengerReceiptEmail,
     sendParcelReceiptEmail,
     sendDepartedEmail,
-    sendDepartureReminderEmail
+    sendDepartureReminderEmail,
+    sendCancellationEmail,
+    sendRefundEmail
 };
