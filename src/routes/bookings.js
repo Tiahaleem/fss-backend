@@ -182,6 +182,27 @@ router.post("/:reference/cancel", requireAuth, async (req, res) => {
 
         await client.query("UPDATE bookings SET status = 'cancelled' WHERE id = $1", [booking.id]);
 
+        // The tracking timeline needs to actually reflect this —
+        // otherwise it just keeps showing whatever step it was on
+        // ("Awaiting boarding") forever, as if nothing happened.
+        // Anything still "active" or "pending" gets closed out, and
+        // a real "Booking cancelled" step gets added at the end.
+        await client.query(
+            "UPDATE tracking_events SET status = 'completed' WHERE booking_id = $1 AND status IN ('active', 'pending')",
+            [booking.id]
+        );
+
+        const nextOrderResult = await client.query(
+            "SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_order FROM tracking_events WHERE booking_id = $1",
+            [booking.id]
+        );
+
+        await client.query(
+            `INSERT INTO tracking_events (booking_id, sort_order, title, event_time, status, icon)
+             VALUES ($1, $2, 'Booking cancelled', to_char(now(), 'HH24:MI'), 'cancelled', 'cancelled')`,
+            [booking.id, nextOrderResult.rows[0].next_order]
+        );
+
         await client.query("COMMIT");
 
         res.json({ reference: booking.reference, status: "cancelled" });
