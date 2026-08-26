@@ -1,3 +1,4 @@
+const { loginLimiter, signupLimiter, verifyLimiter, resendLimiter } = require("../rateLimiters");
 // =========================
 // AUTH API
 // =========================
@@ -48,7 +49,7 @@ function toClientShape(user) {
 // =========================
 // POST /api/auth/signup
 // =========================
-router.post("/signup", async (req, res) => {
+router.post("/signup", signupLimiter, async (req, res) => {
     const client = await pool.connect();
 
     try {
@@ -113,7 +114,7 @@ router.post("/signup", async (req, res) => {
 // =========================
 // POST /api/auth/resend-code
 // =========================
-router.post("/resend-code", async (req, res) => {
+router.post("/resend-code", resendLimiter, async (req, res) => {
     try {
         const { email } = req.body;
 
@@ -158,7 +159,7 @@ router.post("/resend-code", async (req, res) => {
 // =========================
 // POST /api/auth/verify
 // =========================
-router.post("/verify", async (req, res) => {
+router.post("/verify", verifyLimiter, async (req, res) => {
     try {
         const { email, code } = req.body;
 
@@ -202,7 +203,7 @@ router.post("/verify", async (req, res) => {
 // =========================
 // POST /api/auth/login
 // =========================
-router.post("/login", async (req, res) => {
+router.post("/login", loginLimiter, async (req, res) => {
     try {
         const { email, password } = req.body;
 
