@@ -15,6 +15,7 @@ const seatsRouter = require("./routes/seats");
 const bookingsRouter = require("./routes/bookings");
 const eventsRouter = require("./routes/events");
 const paymentsRouter = require("./routes/payments");
+const cronRouter = require("./routes/cron");
 
 const app = express();
 
@@ -55,6 +56,7 @@ app.use("/api/auth", authRouter);
 app.use("/api/bookings", bookingsRouter);
 app.use("/api/events", eventsRouter);
 app.use("/api/payments", paymentsRouter);
+app.use("/api/cron", cronRouter);
 
 const PORT = process.env.PORT || 4000;
 
