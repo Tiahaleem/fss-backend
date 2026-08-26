@@ -16,8 +16,15 @@ const bookingsRouter = require("./routes/bookings");
 const eventsRouter = require("./routes/events");
 const paymentsRouter = require("./routes/payments");
 const cronRouter = require("./routes/cron");
+const { generalLimiter } = require("./rateLimiters");
 
 const app = express();
+
+// Render sits in front of this server as a proxy — without this,
+// every request would look like it's coming from Render's own
+// internal address instead of the real visitor, and rate limiting
+// would either block everyone together or nobody at all.
+app.set("trust proxy", 1);
 
 // Only these origins can call this API — anywhere else gets blocked.
 // Includes your live GitHub Pages site AND localhost, so Live Server
@@ -41,6 +48,7 @@ app.use(cors({
     }
 }));
 app.use(express.json());
+app.use(generalLimiter);
 
 // Health check — useful for confirming the server is actually up
 // once it's deployed, before worrying about anything else
