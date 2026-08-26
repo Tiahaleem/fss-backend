@@ -1,4 +1,3 @@
-const { paymentLimiter } = require("../rateLimiters");
 // =========================
 // PAYMENTS API (Paystack)
 // =========================
@@ -21,30 +20,10 @@ const router = express.Router();
 const pool = require("../db");
 const { optionalAuth } = require("../middleware/requireAuth");
 const { createPassengerBooking, createParcelBooking } = require("../bookingCreators");
+const { paystackRequest } = require("../paystack");
+const { paymentLimiter } = require("../rateLimiters");
 
-const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const FRONTEND_URL = process.env.FRONTEND_URL || "https://tiahaleem.github.io/Fss";
-
-async function paystackRequest(path, options = {}) {
-    const response = await fetch(`https://api.paystack.co${path}`, {
-        ...options,
-        headers: {
-            Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
-            "Content-Type": "application/json",
-            ...options.headers
-        }
-    });
-
-    const data = await response.json();
-
-    if (!response.ok || data.status === false) {
-        const err = new Error(data.message || "Paystack request failed.");
-        err.status = response.status;
-        throw err;
-    }
-
-    return data;
-}
 
 // =========================
 // POST /api/payments/initialize-passenger
@@ -168,7 +147,8 @@ router.get("/verify/:reference", async (req, res) => {
                 passengerEmail: metadata.passengerEmail,
                 passengerPhone: metadata.passengerPhone,
                 travelDate: metadata.travelDate,
-                ownerId: metadata.ownerId
+                ownerId: metadata.ownerId,
+                paymentReference: transaction.reference
             });
         } else if (metadata.bookingType === "parcel") {
             bookingResult = await createParcelBooking({
@@ -183,7 +163,8 @@ router.get("/verify/:reference", async (req, res) => {
                 weightKg: metadata.weightKg,
                 declaredValueKobo: metadata.declaredValueKobo,
                 priceKobo: metadata.priceKobo,
-                ownerId: metadata.ownerId
+                ownerId: metadata.ownerId,
+                paymentReference: transaction.reference
             });
         } else {
             return res.status(400).json({ error: "Unknown booking type in payment metadata." });
