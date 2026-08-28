@@ -82,6 +82,58 @@ router.get("/track/:reference", async (req, res) => {
 });
 
 // =========================
+// GET /api/bookings/:reference/ticket — full details for a printable ticket
+// =========================
+// Passenger bookings only — a parcel doesn't have a "ticket" the
+// same way. Public by reference, same trust model as tracking: the
+// reference itself is the access key, same as a real paper ticket
+// or a tracking number.
+router.get("/:reference/ticket", async (req, res) => {
+    try {
+        const result = await pool.query(
+            `SELECT
+                b.reference, b.status, b.price_kobo,
+                pb.passenger_name, pb.travel_date,
+                r.from_city, r.to_city, r.duration,
+                t.departure_time, t.vehicle,
+                term.name AS terminal_name, term.address AS terminal_address,
+                (SELECT string_agg(seat_number, ', ' ORDER BY seat_number) FROM seat_holds WHERE booking_id = b.id) AS seat_numbers
+             FROM bookings b
+             JOIN passenger_bookings pb ON pb.booking_id = b.id
+             JOIN trips t ON t.id = pb.trip_id
+             JOIN routes r ON r.id = t.route_id
+             JOIN terminals term ON term.id = pb.terminal_id
+             WHERE b.reference = $1 AND b.type = 'passenger'`,
+            [req.params.reference.toUpperCase()]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: "No passenger booking found for that reference." });
+        }
+
+        const row = result.rows[0];
+
+        res.json({
+            reference: row.reference,
+            status: row.status,
+            passengerName: row.passenger_name,
+            route: `${row.from_city} → ${row.to_city}`,
+            travelDate: row.travel_date,
+            departureTime: row.departure_time.slice(0, 5),
+            duration: row.duration,
+            vehicle: row.vehicle,
+            seatNumbers: row.seat_numbers,
+            terminalName: row.terminal_name,
+            terminalAddress: row.terminal_address,
+            price: `₦${(Number(row.price_kobo) / 100).toLocaleString()}`
+        });
+    } catch (err) {
+        console.error("GET /api/bookings/:reference/ticket failed:", err);
+        res.status(500).json({ error: "Couldn't load that ticket." });
+    }
+});
+
+// =========================
 // GET /api/bookings/mine — requires login, used by my-bookings.html
 // =========================
 router.get("/mine", requireAuth, async (req, res) => {
