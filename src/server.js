@@ -17,6 +17,7 @@ const eventsRouter = require("./routes/events");
 const paymentsRouter = require("./routes/payments");
 const cronRouter = require("./routes/cron");
 const { generalLimiter } = require("./rateLimiters");
+const analyticsRouter = require("./routes/analytics");
 
 const app = express();
 
@@ -65,6 +66,7 @@ app.use("/api/bookings", bookingsRouter);
 app.use("/api/events", eventsRouter);
 app.use("/api/payments", paymentsRouter);
 app.use("/api/cron", cronRouter);
+app.use("/api/analytics", analyticsRouter);
 
 const PORT = process.env.PORT || 4000;
 
