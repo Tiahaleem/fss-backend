@@ -251,3 +251,22 @@ CREATE TABLE tracking_events (
 );
 
 CREATE INDEX idx_tracking_events_booking_id ON tracking_events(booking_id);
+
+
+-- =====================================================================
+-- REVIEWS
+-- =====================================================================
+-- One review per booking, and only for passenger bookings that have
+-- actually happened — enforced in the API (confirmed status, travel
+-- date in the past, booking belongs to the reviewer), not just here.
+
+CREATE TABLE reviews (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    booking_id  UUID NOT NULL UNIQUE REFERENCES bookings(id) ON DELETE CASCADE,
+    user_id     UUID REFERENCES users(id),
+    rating      SMALLINT NOT NULL CHECK (rating BETWEEN 1 AND 5),
+    comment     TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_reviews_user_id ON reviews(user_id);
