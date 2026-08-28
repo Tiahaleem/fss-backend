@@ -140,25 +140,37 @@ router.get("/mine", requireAuth, async (req, res) => {
     try {
         const result = await pool.query(
             `SELECT
-                b.reference, b.type, b.price_kobo, b.created_at, b.status,
+                b.id AS booking_id, b.reference, b.type, b.price_kobo, b.created_at, b.status,
                 (SELECT string_agg(seat_number, ', ' ORDER BY seat_number) FROM seat_holds WHERE booking_id = b.id) AS seat_numbers,
                 pb.travel_date,
                 r.from_city AS trip_from, r.to_city AS trip_to,
                 t.departure_time,
                 term.name AS pickup_terminal_name,
-                pab.from_city, pab.to_city, pab.receiver_name
+                pab.from_city, pab.to_city, pab.receiver_name,
+                rev.rating AS my_rating, rev.comment AS my_review_comment
              FROM bookings b
              LEFT JOIN passenger_bookings pb ON pb.booking_id = b.id
              LEFT JOIN trips t ON t.id = pb.trip_id
              LEFT JOIN routes r ON r.id = t.route_id
              LEFT JOIN terminals term ON term.id = pb.terminal_id
              LEFT JOIN parcel_bookings pab ON pab.booking_id = b.id
+             LEFT JOIN reviews rev ON rev.booking_id = b.id
              WHERE b.owner_id = $1
              ORDER BY b.created_at DESC`,
             [req.user.id]
         );
 
-        res.json(result.rows);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const bookings = result.rows.map(row => {
+            const tripHasHappened = row.travel_date && new Date(row.travel_date) < today;
+            const canReview = row.type === "passenger" && row.status === "confirmed" && tripHasHappened && !row.my_rating;
+
+            return { ...row, canReview };
+        });
+
+        res.json(bookings);
     } catch (err) {
         console.error("GET /api/bookings/mine failed:", err);
         res.status(500).json({ error: "Couldn't load your bookings." });
