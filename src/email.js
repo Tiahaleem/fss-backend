@@ -80,6 +80,25 @@ async function sendVerificationEmail(to, code) {
     return send(to, "Verify your email — FSS Transport", html);
 }
 
+async function sendPasswordResetEmail(to, code) {
+    const html = wrapper(`
+<tr><td style="padding:36px 32px 8px;" align="center">
+<p style="margin:0 0 6px; color:#0f172a; font-size:18px; font-weight:bold;">Reset your password</p>
+<p style="margin:0; color:#64748b; font-size:14px; line-height:1.6;">Enter this code to choose a new password for your FSS Transport account.</p>
+</td></tr>
+<tr><td style="padding:24px 32px;" align="center">
+<table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="background-color:#f8fafc; border:1px dashed #d9e2ec; border-radius:12px; padding:18px 36px;">
+<span style="font-size:28px; font-weight:bold; letter-spacing:6px; color:#081f5c;">${code}</span>
+</td></tr></table>
+</td></tr>
+<tr><td style="padding:0 32px 32px;" align="center">
+<p style="margin:0; color:#94a3b8; font-size:12px; line-height:1.6;">This code expires in 10 minutes. If you didn't request this, your password is still safe — just ignore this email.</p>
+</td></tr>
+    `);
+
+    return send(to, "Reset your password — FSS Transport", html);
+}
+
 async function sendPassengerReceiptEmail(to, { passengerName, reference, route, price, seatNumbers, pickupTerminal }) {
     const html = wrapper(`
 <tr><td style="padding:32px 32px 0;">
@@ -247,5 +266,6 @@ module.exports = {
     sendDepartedEmail,
     sendDepartureReminderEmail,
     sendCancellationEmail,
-    sendRefundEmail
+    sendRefundEmail,
+    sendPasswordResetEmail
 };
