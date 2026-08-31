@@ -23,7 +23,7 @@ const jwt = require("jsonwebtoken");
 const { OAuth2Client } = require("google-auth-library");
 const pool = require("../db");
 const { requireAuth } = require("../middleware/requireAuth");
-const { sendVerificationEmail } = require("../email");
+const { sendVerificationEmail, sendPasswordResetEmail } = require("../email");
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const SALT_ROUNDS = 10;
@@ -384,6 +384,97 @@ router.post("/google", async (req, res) => {
     } catch (err) {
         console.error("POST /api/auth/google failed:", err.message);
         res.status(401).json({ error: "Couldn't verify that Google sign-in." });
+    }
+});
+
+// =========================
+// POST /api/auth/forgot-password
+// =========================
+// Deliberately gives the SAME response whether or not the email
+// actually belongs to an account — this stops someone from using
+// this endpoint to check which emails are registered.
+router.post("/forgot-password", resendLimiter, async (req, res) => {
+    try {
+        const { email } = req.body;
+
+        if (!email) {
+            return res.status(400).json({ error: "Email is required." });
+        }
+
+        const genericResponse = { message: "If an account exists with that email, a reset code has been sent." };
+
+        const userResult = await pool.query("SELECT id FROM users WHERE email = $1", [email.toLowerCase()]);
+
+        if (userResult.rows.length === 0) {
+            // No account — same response either way, just nothing to actually send
+            return res.json(genericResponse);
+        }
+
+        const code = generateCode();
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+        await pool.query(
+            `INSERT INTO verification_codes (user_id, email, code, purpose, expires_at)
+             VALUES ($1, $2, $3, 'password_reset', $4)`,
+            [userResult.rows[0].id, email.toLowerCase(), code, expiresAt]
+        );
+
+        const emailResult = await sendPasswordResetEmail(email.toLowerCase(), code);
+
+        res.json({
+            ...genericResponse,
+            // Only ever included when a real account was found — a
+            // temporary dev convenience until every customer's email
+            // reliably delivers (needs a verified sending domain).
+            ...(emailResult.success ? {} : { _devCode: code })
+        });
+    } catch (err) {
+        console.error("POST /api/auth/forgot-password failed:", err.message);
+        res.status(500).json({ error: "Couldn't process that request." });
+    }
+});
+
+// =========================
+// POST /api/auth/reset-password
+// =========================
+router.post("/reset-password", verifyLimiter, async (req, res) => {
+    try {
+        const { email, code, newPassword } = req.body;
+
+        if (!email || !code || !newPassword) {
+            return res.status(400).json({ error: "Email, code, and a new password are all required." });
+        }
+
+        if (newPassword.length < 8) {
+            return res.status(400).json({ error: "New password must be at least 8 characters." });
+        }
+
+        const codeResult = await pool.query(
+            `SELECT * FROM verification_codes
+             WHERE email = $1 AND code = $2 AND purpose = 'password_reset' AND used_at IS NULL
+             ORDER BY created_at DESC LIMIT 1`,
+            [email.toLowerCase(), code]
+        );
+
+        if (codeResult.rows.length === 0) {
+            return res.status(400).json({ error: "Incorrect code." });
+        }
+
+        const verification = codeResult.rows[0];
+
+        if (new Date(verification.expires_at) < new Date()) {
+            return res.status(400).json({ error: "That code has expired. Please request a new one." });
+        }
+
+        const passwordHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
+
+        await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [passwordHash, verification.user_id]);
+        await pool.query("UPDATE verification_codes SET used_at = now() WHERE id = $1", [verification.id]);
+
+        res.json({ message: "Password reset successfully. You can now sign in with your new password." });
+    } catch (err) {
+        console.error("POST /api/auth/reset-password failed:", err.message);
+        res.status(500).json({ error: "Couldn't reset your password." });
     }
 });
 
