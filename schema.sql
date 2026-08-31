@@ -266,6 +266,7 @@ CREATE TABLE reviews (
     user_id     UUID REFERENCES users(id),
     rating      SMALLINT NOT NULL CHECK (rating BETWEEN 1 AND 5),
     comment     TEXT,
+    photo       TEXT, -- optional customer photo, stored as a base64 data URL; NULL shows an initials avatar instead
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
