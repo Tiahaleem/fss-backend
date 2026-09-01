@@ -15,6 +15,7 @@ const express = require("express");
 const router = express.Router();
 const pool = require("../db");
 const { sendDepartureReminderEmail } = require("../email");
+const { sendDepartureReminderSMS } = require("../sms");
 
 const CRON_SECRET = process.env.CRON_SECRET;
 
@@ -30,7 +31,7 @@ router.get("/send-departure-reminders", async (req, res) => {
         // already had its reminder sent.
         const result = await pool.query(
             `SELECT
-                pb.booking_id, pb.passenger_name, pb.passenger_email,
+                pb.booking_id, pb.passenger_name, pb.passenger_email, pb.passenger_phone,
                 b.reference,
                 r.from_city, r.to_city, t.departure_time,
                 term.name AS terminal_name,
@@ -49,13 +50,22 @@ router.get("/send-departure-reminders", async (req, res) => {
         let sentCount = 0;
 
         for (const row of result.rows) {
+            const routeText = `${row.from_city} → ${row.to_city}`;
+            const departureTimeText = row.departure_time.slice(0, 5);
+
             const emailResult = await sendDepartureReminderEmail(row.passenger_email, {
                 passengerName: row.passenger_name,
                 reference: row.reference,
-                route: `${row.from_city} → ${row.to_city}`,
-                departureTime: row.departure_time.slice(0, 5),
+                route: routeText,
+                departureTime: departureTimeText,
                 pickupTerminal: row.terminal_name,
                 seatNumbers: (row.seat_numbers || "").split(", ").filter(Boolean)
+            });
+
+            await sendDepartureReminderSMS(row.passenger_phone, {
+                route: routeText,
+                departureTime: departureTimeText,
+                pickupTerminal: row.terminal_name
             });
 
             // Mark as sent regardless of email success/failure — if

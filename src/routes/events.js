@@ -14,6 +14,7 @@ const router = express.Router();
 const pool = require("../db");
 const { requireAdmin } = require("../middleware/requireAuth");
 const { sendDepartedEmail } = require("../email");
+const { sendDepartedSMS } = require("../sms");
 
 function toClientShape(row) {
     return {
@@ -74,7 +75,7 @@ router.post("/", requireAdmin, async (req, res) => {
         // internal status field changed.
         if (icon === "departed") {
             const passengerResult = await pool.query(
-                `SELECT pb.passenger_name, pb.passenger_email,
+                `SELECT pb.passenger_name, pb.passenger_email, pb.passenger_phone,
                         r.from_city, r.to_city, term.name AS terminal_name
                  FROM passenger_bookings pb
                  JOIN bookings b ON b.id = pb.booking_id
@@ -87,11 +88,18 @@ router.post("/", requireAdmin, async (req, res) => {
 
             if (passengerResult.rows.length > 0) {
                 const p = passengerResult.rows[0];
+                const routeText = `${p.from_city} → ${p.to_city}`;
+
                 sendDepartedEmail(p.passenger_email, {
                     passengerName: p.passenger_name,
                     reference: reference.toUpperCase(),
-                    route: `${p.from_city} → ${p.to_city}`,
+                    route: routeText,
                     departedTime: time
+                });
+
+                sendDepartedSMS(p.passenger_phone, {
+                    reference: reference.toUpperCase(),
+                    route: routeText
                 });
             }
         }
