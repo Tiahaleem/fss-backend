@@ -10,6 +10,7 @@
 
 const pool = require("./db");
 const { sendPassengerReceiptEmail, sendParcelReceiptEmail } = require("./email");
+const { sendBookingReceiptSMS } = require("./sms");
 
 function generateReference(prefix) {
     const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -104,16 +105,25 @@ async function createPassengerBooking({
 
         const terminalNameResult = await pool.query("SELECT name FROM terminals WHERE id = $1", [terminalId]);
 
+        const routeText = `${tripResult.rows[0].from_city} → ${tripResult.rows[0].to_city}`;
+        const priceText = `₦${(totalPriceKobo / 100).toLocaleString()}`;
+
         const emailResult = await sendPassengerReceiptEmail(passengerEmail, {
             passengerName,
             reference,
-            route: `${tripResult.rows[0].from_city} → ${tripResult.rows[0].to_city}`,
-            price: `₦${(totalPriceKobo / 100).toLocaleString()}`,
+            route: routeText,
+            price: priceText,
             seatNumbers,
             pickupTerminal: terminalNameResult.rows[0]?.name || "your pickup terminal"
         });
 
-        return { reference, bookingId, priceKobo: totalPriceKobo, seatCount: seatNumbers.length, emailResult };
+        const smsResult = await sendBookingReceiptSMS(passengerPhone, {
+            reference,
+            route: routeText,
+            price: priceText
+        });
+
+        return { reference, bookingId, priceKobo: totalPriceKobo, seatCount: seatNumbers.length, emailResult, smsResult };
     } catch (err) {
         try { await client.query("ROLLBACK"); } catch (_) {}
         throw err;
@@ -162,15 +172,24 @@ async function createParcelBooking({
 
         await client.query("COMMIT");
 
+        const parcelRouteText = `${fromCity} → ${toCity}`;
+        const parcelPriceText = `₦${((priceKobo || 0) / 100).toLocaleString()}`;
+
         const emailResult = await sendParcelReceiptEmail(senderEmail, {
             senderName,
             reference,
-            route: `${fromCity} → ${toCity}`,
-            price: `₦${((priceKobo || 0) / 100).toLocaleString()}`,
+            route: parcelRouteText,
+            price: parcelPriceText,
             receiverName
         });
 
-        return { reference, bookingId, emailResult };
+        const smsResult = await sendBookingReceiptSMS(senderPhone, {
+            reference,
+            route: parcelRouteText,
+            price: parcelPriceText
+        });
+
+        return { reference, bookingId, emailResult, smsResult };
     } catch (err) {
         try { await client.query("ROLLBACK"); } catch (_) {}
         throw err;
