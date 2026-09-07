@@ -19,11 +19,23 @@ const { requireAuth } = require("../middleware/requireAuth");
 // =========================
 router.post("/", requireAuth, async (req, res) => {
     try {
-        const { bookingId, rating, comment } = req.body;
+        const { bookingId, rating, comment, photo } = req.body;
 
         const ratingNum = Number(rating);
         if (!bookingId || !Number.isInteger(ratingNum) || ratingNum < 1 || ratingNum > 5) {
             return res.status(400).json({ error: "A booking and a rating from 1 to 5 are required." });
+        }
+
+        // A photo is entirely optional — but if one was sent, make sure
+        // it's genuinely an image (not some other file type disguised
+        // as one) and isn't absurdly large (roughly 2MB once decoded).
+        if (photo) {
+            if (!/^data:image\/(png|jpe?g|gif|webp);base64,/.test(photo)) {
+                return res.status(400).json({ error: "That doesn't look like a valid image file." });
+            }
+            if (photo.length > 2_800_000) {
+                return res.status(400).json({ error: "That photo is too large. Please use a smaller image." });
+            }
         }
 
         const bookingResult = await pool.query(
@@ -66,10 +78,10 @@ router.post("/", requireAuth, async (req, res) => {
         }
 
         const insertResult = await pool.query(
-            `INSERT INTO reviews (booking_id, user_id, rating, comment)
-             VALUES ($1, $2, $3, $4)
-             RETURNING id, rating, comment, created_at`,
-            [bookingId, req.user.id, ratingNum, (comment || "").trim() || null]
+            `INSERT INTO reviews (booking_id, user_id, rating, comment, photo)
+             VALUES ($1, $2, $3, $4, $5)
+             RETURNING id, rating, comment, photo, created_at`,
+            [bookingId, req.user.id, ratingNum, (comment || "").trim() || null, photo || null]
         );
 
         res.status(201).json(insertResult.rows[0]);
@@ -90,7 +102,7 @@ router.get("/", async (req, res) => {
         const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50);
 
         const result = await pool.query(
-            `SELECT rev.rating, rev.comment, rev.created_at,
+            `SELECT rev.rating, rev.comment, rev.photo, rev.created_at,
                     pb.passenger_name, r.from_city, r.to_city
              FROM reviews rev
              JOIN bookings b ON b.id = rev.booking_id
@@ -107,6 +119,7 @@ router.get("/", async (req, res) => {
             name: r.passenger_name.trim().split(" ")[0],
             rating: r.rating,
             comment: r.comment,
+            photo: r.photo,
             route: `${r.from_city} → ${r.to_city}`,
             createdAt: r.created_at
         })));
