@@ -6,6 +6,7 @@ require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");
 
 const routesRouter = require("./routes/routes");
 const terminalsRouter = require("./routes/terminals");
@@ -27,6 +28,13 @@ const app = express();
 // internal address instead of the real visitor, and rate limiting
 // would either block everyone together or nobody at all.
 app.set("trust proxy", 1);
+
+// Sets a batch of standard, well-established security headers on
+// every response (stops the site being embedded in a hidden iframe
+// elsewhere, stops browsers from guessing file types in ways that
+// can be abused, etc.) — one line covers protections that would
+// otherwise need to be configured individually.
+app.use(helmet());
 
 // Only these origins can call this API — anywhere else gets blocked.
 // Includes your live GitHub Pages site AND localhost, so Live Server
