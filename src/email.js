@@ -18,7 +18,7 @@
 const { Resend } = require("resend");
 
 const resend = new Resend(process.env.RESEND_API_KEY);
-const FROM_EMAIL = "FSS Transport <onboarding@resend.dev>"; // Resend's shared test sender — swap for your own verified domain later
+const FROM_EMAIL = "FSS Transport <noreply@fsstransport.com.ng>"; // your own verified domain — works for every real customer now
 const LOGO_URL = "https://tiahaleem.github.io/Fss/img/ffs_bg_removal.png";
 const SITE_URL = "https://tiahaleem.github.io/Fss";
 
