@@ -122,11 +122,29 @@ CREATE INDEX idx_terminals_city ON terminals(city);
 -- route_id (a real foreign key) instead of duplicating from/to text
 -- on every trip, the way the localStorage version had to.
 
+-- =====================================================================
+-- VEHICLES
+-- =====================================================================
+-- A real, specific vehicle the business owns — not just a text label.
+-- Lets the system actually know "we only have 2 of these" and catch
+-- a trip schedule that would need the same vehicle in two places at once.
+
+CREATE TABLE vehicles (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name            VARCHAR(80)  NOT NULL, -- e.g. "Honda Odyssey"
+    plate_number    VARCHAR(30),
+    seats           SMALLINT     NOT NULL,
+    status          VARCHAR(10)  NOT NULL DEFAULT 'active'
+                        CHECK (status IN ('active', 'inactive')),
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+
 CREATE TABLE trips (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     route_id        UUID NOT NULL REFERENCES routes(id) ON DELETE CASCADE,
     departure_time  TIME NOT NULL, -- e.g. 06:00 — the daily recurring time
-    vehicle         VARCHAR(80) NOT NULL,
+    vehicle_id      UUID REFERENCES vehicles(id), -- the real, specific vehicle assigned to this trip
     total_seats     SMALLINT    NOT NULL,
     status          VARCHAR(10) NOT NULL DEFAULT 'active'
                         CHECK (status IN ('active', 'inactive')),
@@ -135,6 +153,7 @@ CREATE TABLE trips (
 );
 
 CREATE INDEX idx_trips_route_id ON trips(route_id);
+CREATE INDEX idx_trips_vehicle_id ON trips(vehicle_id);
 
 
 -- =====================================================================
