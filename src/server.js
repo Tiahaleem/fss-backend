@@ -20,6 +20,7 @@ const cronRouter = require("./routes/cron");
 const { generalLimiter } = require("./rateLimiters");
 const analyticsRouter = require("./routes/analytics");
 const reviewsRouter = require("./routes/reviews");
+const vehiclesRouter = require("./routes/vehicles");
 
 const app = express();
 
@@ -78,6 +79,7 @@ app.use("/api/payments", paymentsRouter);
 app.use("/api/cron", cronRouter);
 app.use("/api/analytics", analyticsRouter);
 app.use("/api/reviews", reviewsRouter);
+app.use("/api/vehicles", vehiclesRouter);
 
 const PORT = process.env.PORT || 4000;
 
