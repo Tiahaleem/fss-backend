@@ -41,6 +41,7 @@ app.use(helmet());
 // testing keeps working alongside the real deployed site.
 const allowedOrigins = [
     "https://tiahaleem.github.io",
+    "https://fsstransport.com.ng",
     "http://localhost:5500",
     "http://127.0.0.1:5500"
 ];
