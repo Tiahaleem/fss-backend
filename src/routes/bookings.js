@@ -13,6 +13,7 @@ const pool = require("../db");
 const { requireAuth, requireAdmin } = require("../middleware/requireAuth");
 const { createPassengerBooking, createParcelBooking } = require("../bookingCreators");
 const { paystackRequest } = require("../paystack");
+const { flutterwaveRequest } = require("../flutterwave");
 const { sendCancellationEmail, sendRefundEmail } = require("../email");
 const { sendCancellationSMS, sendRefundSMS } = require("../sms");
 
@@ -342,15 +343,30 @@ router.post("/:reference/refund", requireAdmin, async (req, res) => {
         }
 
         if (!booking.payment_reference) {
-            return res.status(400).json({ error: "No payment reference on file for this booking — it can't be refunded through Paystack automatically." });
+            return res.status(400).json({ error: "No payment reference on file for this booking — it can't be refunded automatically." });
         }
 
-        // The actual real refund call — Paystack reverses the charge
-        // on the customer's card/account.
-        await paystackRequest("/refund", {
-            method: "POST",
-            body: JSON.stringify({ transaction: booking.payment_reference })
-        });
+        // FLW- prefix means this was a Flutterwave payment (see
+        // generateTxRef in flutterwave.js) — everything else is
+        // assumed to be a real Paystack reference. Each provider
+        // needs its own refund call, in its own shape.
+        if (booking.payment_reference.startsWith("FLW-")) {
+            // Flutterwave's refund endpoint needs its own internal
+            // numeric transaction id, not our tx_ref — verify first
+            // to look that up.
+            const verifyResult = await flutterwaveRequest(`/transactions/verify_by_reference?tx_ref=${encodeURIComponent(booking.payment_reference)}`);
+            await flutterwaveRequest(`/transactions/${verifyResult.data.id}/refund`, {
+                method: "POST",
+                body: JSON.stringify({})
+            });
+        } else {
+            // The actual real refund call — Paystack reverses the
+            // charge on the customer's card/account.
+            await paystackRequest("/refund", {
+                method: "POST",
+                body: JSON.stringify({ transaction: booking.payment_reference })
+            });
+        }
 
         await pool.query("UPDATE bookings SET status = 'refunded' WHERE id = $1", [booking.id]);
 
