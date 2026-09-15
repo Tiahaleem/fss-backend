@@ -1,361 +1,410 @@
 // =========================
-// PAYMENTS API (Paystack)
+// BOOKINGS API
 // =========================
-// The real gate between "customer clicked Pay" and "a booking
-// actually gets created". Two steps:
-//   1. initialize — tells Paystack "start a transaction for this
-//      amount", gets back a checkout URL to send the customer to.
-//      The booking details ride along as Paystack's own "metadata"
-//      field — Paystack hands them straight back to us on verify,
-//      so nothing needs to be stored in our own database in the
-//      meantime.
-//   2. verify — after Paystack redirects the customer back, THIS is
-//      the step that actually checks with Paystack directly whether
-//      the payment really succeeded. Only then does the real booking
-//      get created. The redirect alone proves nothing — it's just a
-//      browser navigating; a real check has to happen server-to-server.
+// The piece that ties everything together: creating a booking
+// touches bookings + (passenger_bookings or parcel_bookings) +
+// seat_holds + tracking_events, all as ONE transaction — either
+// every table gets updated correctly, or none of them do. That's
+// something localStorage could never guarantee.
 
 const express = require("express");
 const router = express.Router();
 const pool = require("../db");
-const { optionalAuth } = require("../middleware/requireAuth");
+const { requireAuth, requireAdmin } = require("../middleware/requireAuth");
 const { createPassengerBooking, createParcelBooking } = require("../bookingCreators");
 const { paystackRequest } = require("../paystack");
-const { flutterwaveRequest, generateTxRef } = require("../flutterwave");
-const { paymentLimiter } = require("../rateLimiters");
-
-const FRONTEND_URL = process.env.FRONTEND_URL || "https://tiahaleem.github.io/Fss";
+const { flutterwaveRequest } = require("../flutterwave");
+const { sendCancellationEmail, sendRefundEmail } = require("../email");
+const { sendCancellationSMS, sendRefundSMS } = require("../sms");
 
 // =========================
-// POST /api/payments/initialize-passenger
+// POST /api/bookings/passenger — ADMIN ONLY now
 // =========================
-router.post("/initialize-passenger", paymentLimiter, optionalAuth, async (req, res) => {
+// Real customers no longer hit this directly — they go through
+// /api/payments/initialize-passenger, which only creates the actual
+// booking after Paystack confirms the payment genuinely succeeded.
+// This stays open for admin use (manual/support bookings, e.g. a
+// phone booking that needs entering by hand).
+router.post("/passenger", requireAdmin, async (req, res) => {
     try {
-        const { tripId, terminalId, seatNumbers, sessionId, passengerName, passengerEmail, passengerPhone, travelDate } = req.body;
+        const result = await createPassengerBooking(req.body);
+        res.status(201).json(result);
+    } catch (err) {
+        console.error("POST /api/bookings/passenger failed:", err.message);
+        res.status(err.status || 500).json({ error: err.message || "Couldn't create that booking." });
+    }
+});
 
-        if (!tripId || !terminalId || !Array.isArray(seatNumbers) || seatNumbers.length === 0 || !passengerEmail) {
-            return res.status(400).json({ error: "Missing required booking details." });
-        }
+// =========================
+// POST /api/bookings/parcel — ADMIN ONLY now
+// =========================
+router.post("/parcel", requireAdmin, async (req, res) => {
+    try {
+        const result = await createParcelBooking(req.body);
+        res.status(201).json(result);
+    } catch (err) {
+        console.error("POST /api/bookings/parcel failed:", err.message);
+        res.status(err.status || 500).json({ error: err.message || "Couldn't create that booking." });
+    }
+});
 
-        // Look up the real price server-side — never trust an amount
-        // sent from the browser for what to actually charge.
-        const tripResult = await pool.query(
-            `SELECT routes.price_kobo FROM trips JOIN routes ON routes.id = trips.route_id WHERE trips.id = $1`,
-            [tripId]
+// =========================
+// GET /api/bookings/track/:reference — public, used by track.html
+// =========================
+router.get("/track/:reference", async (req, res) => {
+    try {
+        const bookingResult = await pool.query(
+            "SELECT id, reference, type FROM bookings WHERE reference = $1",
+            [req.params.reference.toUpperCase()]
         );
 
-        if (tripResult.rows.length === 0) {
-            return res.status(404).json({ error: "That trip doesn't exist." });
+        if (bookingResult.rows.length === 0) {
+            return res.status(404).json({ error: "No booking found for that reference." });
         }
 
-        const totalKobo = tripResult.rows[0].price_kobo * seatNumbers.length;
+        const booking = bookingResult.rows[0];
 
-        const paystackResponse = await paystackRequest("/transaction/initialize", {
-            method: "POST",
-            body: JSON.stringify({
-                email: passengerEmail,
-                amount: totalKobo, // Paystack expects the smallest currency unit — kobo, matching our schema exactly
-                callback_url: `${FRONTEND_URL}/payment-callback.html`,
-                metadata: {
-                    bookingType: "passenger",
-                    tripId, terminalId, seatNumbers, sessionId,
-                    passengerName, passengerEmail, passengerPhone, travelDate,
-                    ownerId: req.user ? req.user.id : null
-                }
-            })
-        });
-
-        res.json({
-            authorizationUrl: paystackResponse.data.authorization_url,
-            reference: paystackResponse.data.reference
-        });
-    } catch (err) {
-        console.error("POST /api/payments/initialize-passenger failed:", err.message);
-        res.status(err.status || 500).json({ error: err.message || "Couldn't start payment." });
-    }
-});
-
-// =========================
-// POST /api/payments/initialize-parcel
-// =========================
-router.post("/initialize-parcel", paymentLimiter, optionalAuth, async (req, res) => {
-    try {
-        const {
-            fromCity, toCity, senderName, senderPhone, senderEmail,
-            receiverName, receiverPhone, description, weightKg, declaredValueKobo, priceKobo
-        } = req.body;
-
-        if (!fromCity || !toCity || !senderEmail || !priceKobo) {
-            return res.status(400).json({ error: "Missing required parcel details." });
-        }
-
-        const paystackResponse = await paystackRequest("/transaction/initialize", {
-            method: "POST",
-            body: JSON.stringify({
-                email: senderEmail,
-                amount: priceKobo,
-                callback_url: `${FRONTEND_URL}/payment-callback.html`,
-                metadata: {
-                    bookingType: "parcel",
-                    fromCity, toCity, senderName, senderPhone, senderEmail,
-                    receiverName, receiverPhone, description, weightKg, declaredValueKobo, priceKobo,
-                    ownerId: req.user ? req.user.id : null
-                }
-            })
-        });
-
-        res.json({
-            authorizationUrl: paystackResponse.data.authorization_url,
-            reference: paystackResponse.data.reference
-        });
-    } catch (err) {
-        console.error("POST /api/payments/initialize-parcel failed:", err.message);
-        res.status(err.status || 500).json({ error: err.message || "Couldn't start payment." });
-    }
-});
-
-// =========================
-// GET /api/payments/verify/:reference
-// =========================
-// The one function that actually matters for security here: checks
-// DIRECTLY with Paystack (server-to-server, using the secret key)
-// whether a payment genuinely succeeded, then — and only then —
-// creates the real booking using the metadata Paystack hands back.
-router.get("/verify/:reference", async (req, res) => {
-    try {
-        const paystackResponse = await paystackRequest(`/transaction/verify/${encodeURIComponent(req.params.reference)}`);
-        const transaction = paystackResponse.data;
-
-        if (transaction.status !== "success") {
-            return res.status(402).json({ error: "Payment was not successful.", paystackStatus: transaction.status });
-        }
-
-        const metadata = transaction.metadata;
-
-        if (!metadata || !metadata.bookingType) {
-            return res.status(400).json({ error: "Payment succeeded but booking details are missing. Contact support with your payment reference." });
-        }
-
-        let bookingResult;
-
-        if (metadata.bookingType === "passenger") {
-            bookingResult = await createPassengerBooking({
-                tripId: metadata.tripId,
-                terminalId: metadata.terminalId,
-                seatNumbers: metadata.seatNumbers,
-                sessionId: metadata.sessionId,
-                passengerName: metadata.passengerName,
-                passengerEmail: metadata.passengerEmail,
-                passengerPhone: metadata.passengerPhone,
-                travelDate: metadata.travelDate,
-                ownerId: metadata.ownerId,
-                paymentReference: transaction.reference
-            });
-        } else if (metadata.bookingType === "parcel") {
-            bookingResult = await createParcelBooking({
-                fromCity: metadata.fromCity,
-                toCity: metadata.toCity,
-                senderName: metadata.senderName,
-                senderPhone: metadata.senderPhone,
-                senderEmail: metadata.senderEmail,
-                receiverName: metadata.receiverName,
-                receiverPhone: metadata.receiverPhone,
-                description: metadata.description,
-                weightKg: metadata.weightKg,
-                declaredValueKobo: metadata.declaredValueKobo,
-                priceKobo: metadata.priceKobo,
-                ownerId: metadata.ownerId,
-                paymentReference: transaction.reference
-            });
-        } else {
-            return res.status(400).json({ error: "Unknown booking type in payment metadata." });
-        }
-
-        res.json({ paymentVerified: true, ...bookingResult });
-    } catch (err) {
-        console.error("GET /api/payments/verify failed:", err.message);
-        res.status(err.status || 500).json({ error: err.message || "Couldn't verify that payment." });
-    }
-});
-
-// =========================
-// FLUTTERWAVE — same pattern as above, different provider
-// =========================
-// Key differences from Paystack worth remembering:
-//   - Flutterwave charges in NAIRA, not kobo — every amount gets
-//     divided by 100 before being sent.
-//   - Flutterwave doesn't generate a reference for us — we make one
-//     up (generateTxRef) before ever calling them.
-//   - Booking details ride along in Flutterwave's "meta" field,
-//     same idea as Paystack's "metadata".
-
-// =========================
-// POST /api/payments/flutterwave/initialize-passenger
-// =========================
-router.post("/flutterwave/initialize-passenger", paymentLimiter, optionalAuth, async (req, res) => {
-    try {
-        const { tripId, terminalId, seatNumbers, sessionId, passengerName, passengerEmail, passengerPhone, travelDate } = req.body;
-
-        if (!tripId || !terminalId || !Array.isArray(seatNumbers) || seatNumbers.length === 0 || !passengerEmail) {
-            return res.status(400).json({ error: "Missing required booking details." });
-        }
-
-        const tripResult = await pool.query(
-            `SELECT routes.price_kobo FROM trips JOIN routes ON routes.id = trips.route_id WHERE trips.id = $1`,
-            [tripId]
+        const eventsResult = await pool.query(
+            `SELECT title, event_time, status, icon
+             FROM tracking_events
+             WHERE booking_id = $1
+             ORDER BY sort_order`,
+            [booking.id]
         );
 
-        if (tripResult.rows.length === 0) {
-            return res.status(404).json({ error: "That trip doesn't exist." });
-        }
-
-        const totalKobo = tripResult.rows[0].price_kobo * seatNumbers.length;
-        const txRef = generateTxRef();
-
-        const flwResponse = await flutterwaveRequest("/payments", {
-            method: "POST",
-            body: JSON.stringify({
-                tx_ref: txRef,
-                amount: totalKobo / 100, // Flutterwave wants Naira, not kobo
-                currency: "NGN",
-                redirect_url: `${FRONTEND_URL}/payment-callback.html`,
-                customer: {
-                    email: passengerEmail,
-                    phonenumber: passengerPhone,
-                    name: passengerName
-                },
-                customizations: { title: "FSS Transport" },
-                meta: {
-                    bookingType: "passenger",
-                    tripId, terminalId, seatNumbers, sessionId,
-                    passengerName, passengerEmail, passengerPhone, travelDate,
-                    ownerId: req.user ? req.user.id : null
-                }
-            })
-        });
-
         res.json({
-            authorizationUrl: flwResponse.data.link,
-            reference: txRef
+            reference: booking.reference,
+            type: booking.type,
+            events: eventsResult.rows
         });
     } catch (err) {
-        console.error("POST /api/payments/flutterwave/initialize-passenger failed:", err.message);
-        res.status(err.status || 500).json({ error: err.message || "Couldn't start payment." });
+        console.error("GET /api/bookings/track/:reference failed:", err);
+        res.status(500).json({ error: "Couldn't look up that reference." });
     }
 });
 
 // =========================
-// POST /api/payments/flutterwave/initialize-parcel
+// GET /api/bookings/:reference/ticket — full details for a printable ticket
 // =========================
-router.post("/flutterwave/initialize-parcel", paymentLimiter, optionalAuth, async (req, res) => {
+// Passenger bookings only — a parcel doesn't have a "ticket" the
+// same way. Public by reference, same trust model as tracking: the
+// reference itself is the access key, same as a real paper ticket
+// or a tracking number.
+router.get("/:reference/ticket", async (req, res) => {
     try {
-        const {
-            fromCity, toCity, senderName, senderPhone, senderEmail,
-            receiverName, receiverPhone, description, weightKg, declaredValueKobo, priceKobo
-        } = req.body;
+        const result = await pool.query(
+            `SELECT
+                b.reference, b.status, b.price_kobo,
+                pb.passenger_name, pb.travel_date,
+                r.from_city, r.to_city, r.duration,
+                t.departure_time, t.vehicle,
+                term.name AS terminal_name, term.address AS terminal_address,
+                (SELECT string_agg(seat_number, ', ' ORDER BY seat_number) FROM seat_holds WHERE booking_id = b.id) AS seat_numbers
+             FROM bookings b
+             JOIN passenger_bookings pb ON pb.booking_id = b.id
+             JOIN trips t ON t.id = pb.trip_id
+             JOIN routes r ON r.id = t.route_id
+             JOIN terminals term ON term.id = pb.terminal_id
+             WHERE b.reference = $1 AND b.type = 'passenger'`,
+            [req.params.reference.toUpperCase()]
+        );
 
-        if (!fromCity || !toCity || !senderEmail || !priceKobo) {
-            return res.status(400).json({ error: "Missing required parcel details." });
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: "No passenger booking found for that reference." });
         }
 
-        const txRef = generateTxRef();
-
-        const flwResponse = await flutterwaveRequest("/payments", {
-            method: "POST",
-            body: JSON.stringify({
-                tx_ref: txRef,
-                amount: priceKobo / 100,
-                currency: "NGN",
-                redirect_url: `${FRONTEND_URL}/payment-callback.html`,
-                customer: {
-                    email: senderEmail,
-                    phonenumber: senderPhone,
-                    name: senderName
-                },
-                customizations: { title: "FSS Transport" },
-                meta: {
-                    bookingType: "parcel",
-                    fromCity, toCity, senderName, senderPhone, senderEmail,
-                    receiverName, receiverPhone, description, weightKg, declaredValueKobo, priceKobo,
-                    ownerId: req.user ? req.user.id : null
-                }
-            })
-        });
+        const row = result.rows[0];
 
         res.json({
-            authorizationUrl: flwResponse.data.link,
-            reference: txRef
+            reference: row.reference,
+            status: row.status,
+            passengerName: row.passenger_name,
+            route: `${row.from_city} → ${row.to_city}`,
+            travelDate: row.travel_date,
+            departureTime: row.departure_time.slice(0, 5),
+            duration: row.duration,
+            vehicle: row.vehicle,
+            seatNumbers: row.seat_numbers,
+            terminalName: row.terminal_name,
+            terminalAddress: row.terminal_address,
+            price: `₦${(Number(row.price_kobo) / 100).toLocaleString()}`
         });
     } catch (err) {
-        console.error("POST /api/payments/flutterwave/initialize-parcel failed:", err.message);
-        res.status(err.status || 500).json({ error: err.message || "Couldn't start payment." });
+        console.error("GET /api/bookings/:reference/ticket failed:", err);
+        res.status(500).json({ error: "Couldn't load that ticket." });
     }
 });
 
 // =========================
-// GET /api/payments/flutterwave/verify/:txRef
+// GET /api/bookings/mine — requires login, used by my-bookings.html
 // =========================
-router.get("/flutterwave/verify/:txRef", async (req, res) => {
+router.get("/mine", requireAuth, async (req, res) => {
     try {
-        const flwResponse = await flutterwaveRequest(`/transactions/verify_by_reference?tx_ref=${encodeURIComponent(req.params.txRef)}`);
-        const transaction = flwResponse.data;
+        const result = await pool.query(
+            `SELECT
+                b.id AS booking_id, b.reference, b.type, b.price_kobo, b.created_at, b.status,
+                (SELECT string_agg(seat_number, ', ' ORDER BY seat_number) FROM seat_holds WHERE booking_id = b.id) AS seat_numbers,
+                pb.travel_date,
+                r.from_city AS trip_from, r.to_city AS trip_to,
+                t.departure_time,
+                term.name AS pickup_terminal_name,
+                pab.from_city, pab.to_city, pab.receiver_name,
+                rev.rating AS my_rating, rev.comment AS my_review_comment
+             FROM bookings b
+             LEFT JOIN passenger_bookings pb ON pb.booking_id = b.id
+             LEFT JOIN trips t ON t.id = pb.trip_id
+             LEFT JOIN routes r ON r.id = t.route_id
+             LEFT JOIN terminals term ON term.id = pb.terminal_id
+             LEFT JOIN parcel_bookings pab ON pab.booking_id = b.id
+             LEFT JOIN reviews rev ON rev.booking_id = b.id
+             WHERE b.owner_id = $1
+             ORDER BY b.created_at DESC`,
+            [req.user.id]
+        );
 
-        if (transaction.status !== "successful") {
-            return res.status(402).json({ error: "Payment was not successful.", flutterwaveStatus: transaction.status });
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const bookings = result.rows.map(row => {
+            const tripHasHappened = row.travel_date && new Date(row.travel_date) < today;
+            const canReview = row.type === "passenger" && row.status === "confirmed" && tripHasHappened && !row.my_rating;
+
+            return { ...row, canReview };
+        });
+
+        res.json(bookings);
+    } catch (err) {
+        console.error("GET /api/bookings/mine failed:", err);
+        res.status(500).json({ error: "Couldn't load your bookings." });
+    }
+});
+
+// =========================
+// GET /api/bookings — admin only, full list with details
+// =========================
+router.get("/", requireAdmin, async (req, res) => {
+    try {
+        const result = await pool.query(
+            `SELECT
+                b.reference, b.type, b.price_kobo, b.created_at, b.status,
+                pb.passenger_name, pb.passenger_phone,
+                (SELECT string_agg(seat_number, ', ' ORDER BY seat_number) FROM seat_holds WHERE booking_id = b.id) AS seat_numbers,
+                pab.sender_name, pab.sender_phone, pab.receiver_name, pab.receiver_phone,
+                pab.from_city, pab.to_city
+             FROM bookings b
+             LEFT JOIN passenger_bookings pb ON pb.booking_id = b.id
+             LEFT JOIN parcel_bookings pab ON pab.booking_id = b.id
+             ORDER BY b.created_at DESC`
+        );
+
+        res.json(result.rows);
+    } catch (err) {
+        console.error("GET /api/bookings failed:", err);
+        res.status(500).json({ error: "Couldn't load bookings." });
+    }
+});
+
+// =========================
+// POST /api/bookings/:reference/cancel
+// =========================
+// Works for either the customer who owns this booking, or an admin
+// (e.g. handling a phone request to cancel). Releases the seats back
+// to available (passenger bookings only) and marks the booking
+// cancelled — but does NOT touch the money. Refunding is a separate,
+// deliberate action below, since not every cancellation should
+// automatically trigger a real refund.
+router.post("/:reference/cancel", requireAuth, async (req, res) => {
+    const client = await pool.connect();
+
+    try {
+        const bookingResult = await client.query(
+            "SELECT * FROM bookings WHERE reference = $1",
+            [req.params.reference.toUpperCase()]
+        );
+
+        if (bookingResult.rows.length === 0) {
+            return res.status(404).json({ error: "Booking not found." });
         }
 
-        // Same failsafe Flutterwave's own docs recommend: don't just
-        // trust "successful" — confirm the currency actually matches
-        // what was expected (this system only ever charges in Naira).
-        if (transaction.currency !== "NGN") {
-            return res.status(402).json({ error: "Payment currency didn't match what was expected." });
+        const booking = bookingResult.rows[0];
+
+        const isOwner = booking.owner_id && booking.owner_id === req.user.id;
+        const isAdmin = req.user.role === "admin";
+
+        if (!isOwner && !isAdmin) {
+            return res.status(403).json({ error: "You can only cancel your own bookings." });
         }
 
-        const metadata = transaction.meta;
-
-        if (!metadata || !metadata.bookingType) {
-            return res.status(400).json({ error: "Payment succeeded but booking details are missing. Contact support with your payment reference." });
+        if (booking.status !== "confirmed") {
+            return res.status(400).json({ error: `This booking is already ${booking.status}.` });
         }
 
-        let bookingResult;
+        await client.query("BEGIN");
 
-        if (metadata.bookingType === "passenger") {
-            bookingResult = await createPassengerBooking({
-                tripId: metadata.tripId,
-                terminalId: metadata.terminalId,
-                seatNumbers: metadata.seatNumbers,
-                sessionId: metadata.sessionId,
-                passengerName: metadata.passengerName,
-                passengerEmail: metadata.passengerEmail,
-                passengerPhone: metadata.passengerPhone,
-                travelDate: metadata.travelDate,
-                ownerId: metadata.ownerId,
-                paymentReference: transaction.tx_ref
-            });
-        } else if (metadata.bookingType === "parcel") {
-            bookingResult = await createParcelBooking({
-                fromCity: metadata.fromCity,
-                toCity: metadata.toCity,
-                senderName: metadata.senderName,
-                senderPhone: metadata.senderPhone,
-                senderEmail: metadata.senderEmail,
-                receiverName: metadata.receiverName,
-                receiverPhone: metadata.receiverPhone,
-                description: metadata.description,
-                weightKg: metadata.weightKg,
-                declaredValueKobo: metadata.declaredValueKobo,
-                priceKobo: metadata.priceKobo,
-                ownerId: metadata.ownerId,
-                paymentReference: transaction.tx_ref
+        // For a passenger booking, actually free the seats back up —
+        // deleting the seat_holds rows makes them immediately
+        // available for someone else to select.
+        if (booking.type === "passenger") {
+            await client.query("DELETE FROM seat_holds WHERE booking_id = $1", [booking.id]);
+        }
+
+        await client.query("UPDATE bookings SET status = 'cancelled' WHERE id = $1", [booking.id]);
+
+        // The tracking timeline needs to actually reflect this —
+        // otherwise it just keeps showing whatever step it was on
+        // ("Awaiting boarding") forever, as if nothing happened.
+        // Anything still "active" or "pending" gets closed out, and
+        // a real "Booking cancelled" step gets added at the end.
+        await client.query(
+            "UPDATE tracking_events SET status = 'completed' WHERE booking_id = $1 AND status IN ('active', 'pending')",
+            [booking.id]
+        );
+
+        const nextOrderResult = await client.query(
+            "SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_order FROM tracking_events WHERE booking_id = $1",
+            [booking.id]
+        );
+
+        await client.query(
+            `INSERT INTO tracking_events (booking_id, sort_order, title, event_time, status, icon)
+             VALUES ($1, $2, 'Booking cancelled', to_char(now(), 'HH24:MI'), 'cancelled', 'cancelled')`,
+            [booking.id, nextOrderResult.rows[0].next_order]
+        );
+
+        await client.query("COMMIT");
+
+        // Send the notification AFTER commit — a failed email should
+        // never undo a cancellation that already genuinely happened.
+        try {
+            let contactEmail, contactName, contactPhone, description;
+
+            if (booking.type === "passenger") {
+                const details = await pool.query(
+                    `SELECT pb.passenger_name, pb.passenger_email, pb.passenger_phone, r.from_city, r.to_city
+                     FROM passenger_bookings pb
+                     JOIN trips t ON t.id = pb.trip_id
+                     JOIN routes r ON r.id = t.route_id
+                     WHERE pb.booking_id = $1`,
+                    [booking.id]
+                );
+                contactEmail = details.rows[0].passenger_email;
+                contactName = details.rows[0].passenger_name;
+                contactPhone = details.rows[0].passenger_phone;
+                description = `${details.rows[0].from_city} → ${details.rows[0].to_city} trip`;
+            } else {
+                const details = await pool.query(
+                    "SELECT sender_name, sender_email, sender_phone, from_city, to_city FROM parcel_bookings WHERE booking_id = $1",
+                    [booking.id]
+                );
+                contactEmail = details.rows[0].sender_email;
+                contactName = details.rows[0].sender_name;
+                contactPhone = details.rows[0].sender_phone;
+                description = `${details.rows[0].from_city} → ${details.rows[0].to_city} parcel`;
+            }
+
+            await sendCancellationEmail(contactEmail, { name: contactName, reference: booking.reference, description });
+            await sendCancellationSMS(contactPhone, { reference: booking.reference });
+        } catch (emailErr) {
+            console.error("Cancellation email failed:", emailErr.message);
+        }
+
+        res.json({ reference: booking.reference, status: "cancelled" });
+    } catch (err) {
+        await client.query("ROLLBACK");
+        console.error("POST /api/bookings/:reference/cancel failed:", err.message);
+        res.status(500).json({ error: "Couldn't cancel that booking." });
+    } finally {
+        client.release();
+    }
+});
+
+// =========================
+// POST /api/bookings/:reference/refund — ADMIN ONLY
+// =========================
+// Issues a REAL refund through Paystack, against the actual payment
+// that was made. Needs payment_reference to exist — a booking with
+// no stored payment reference (e.g. very old test data) can't be
+// refunded through Paystack and would need handling outside the system.
+router.post("/:reference/refund", requireAdmin, async (req, res) => {
+    try {
+        const bookingResult = await pool.query(
+            "SELECT * FROM bookings WHERE reference = $1",
+            [req.params.reference.toUpperCase()]
+        );
+
+        if (bookingResult.rows.length === 0) {
+            return res.status(404).json({ error: "Booking not found." });
+        }
+
+        const booking = bookingResult.rows[0];
+
+        if (booking.status === "refunded") {
+            return res.status(400).json({ error: "This booking has already been refunded." });
+        }
+
+        if (!booking.payment_reference) {
+            return res.status(400).json({ error: "No payment reference on file for this booking — it can't be refunded automatically." });
+        }
+
+        // FLW- prefix means this was a Flutterwave payment (see
+        // generateTxRef in flutterwave.js) — everything else is
+        // assumed to be a real Paystack reference. Each provider
+        // needs its own refund call, in its own shape.
+        if (booking.payment_reference.startsWith("FLW-")) {
+            // Flutterwave's refund endpoint needs its own internal
+            // numeric transaction id, not our tx_ref — verify first
+            // to look that up.
+            const verifyResult = await flutterwaveRequest(`/transactions/verify_by_reference?tx_ref=${encodeURIComponent(booking.payment_reference)}`);
+            await flutterwaveRequest(`/transactions/${verifyResult.data.id}/refund`, {
+                method: "POST",
+                body: JSON.stringify({})
             });
         } else {
-            return res.status(400).json({ error: "Unknown booking type in payment metadata." });
+            // The actual real refund call — Paystack reverses the
+            // charge on the customer's card/account.
+            await paystackRequest("/refund", {
+                method: "POST",
+                body: JSON.stringify({ transaction: booking.payment_reference })
+            });
         }
 
-        res.json({ paymentVerified: true, ...bookingResult });
+        await pool.query("UPDATE bookings SET status = 'refunded' WHERE id = $1", [booking.id]);
+
+        try {
+            let contactEmail, contactName, contactPhone;
+
+            if (booking.type === "passenger") {
+                const details = await pool.query("SELECT passenger_name, passenger_email, passenger_phone FROM passenger_bookings WHERE booking_id = $1", [booking.id]);
+                contactEmail = details.rows[0].passenger_email;
+                contactName = details.rows[0].passenger_name;
+                contactPhone = details.rows[0].passenger_phone;
+            } else {
+                const details = await pool.query("SELECT sender_name, sender_email, sender_phone FROM parcel_bookings WHERE booking_id = $1", [booking.id]);
+                contactEmail = details.rows[0].sender_email;
+                contactName = details.rows[0].sender_name;
+                contactPhone = details.rows[0].sender_phone;
+            }
+
+            const amountText = `₦${(Number(booking.price_kobo) / 100).toLocaleString()}`;
+
+            await sendRefundEmail(contactEmail, {
+                name: contactName,
+                reference: booking.reference,
+                amount: amountText
+            });
+
+            await sendRefundSMS(contactPhone, {
+                reference: booking.reference,
+                amount: amountText
+            });
+        } catch (emailErr) {
+            console.error("Refund email failed:", emailErr.message);
+        }
+
+        res.json({ reference: booking.reference, status: "refunded" });
     } catch (err) {
-        console.error("GET /api/payments/flutterwave/verify failed:", err.message);
-        res.status(err.status || 500).json({ error: err.message || "Couldn't verify that payment." });
+        console.error("POST /api/bookings/:reference/refund failed:", err.message);
+        res.status(err.status || 500).json({ error: err.message || "Couldn't process that refund." });
     }
 });
 
