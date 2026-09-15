@@ -227,9 +227,11 @@ router.post("/flutterwave/initialize-passenger", paymentLimiter, optionalAuth, a
                 customizations: { title: "FSS Transport" },
                 meta: {
                     bookingType: "passenger",
-                    tripId, terminalId, seatNumbers, sessionId,
+                    tripId, terminalId,
+                    seatNumbers: seatNumbers.join(","), // Flutterwave's meta rejects arrays — flattened to a string
+                    sessionId: sessionId || "",
                     passengerName, passengerEmail, passengerPhone, travelDate,
-                    ownerId: req.user ? req.user.id : null
+                    ownerId: req.user ? req.user.id : "" // Flutterwave's meta rejects null too
                 }
             })
         });
@@ -277,7 +279,7 @@ router.post("/flutterwave/initialize-parcel", paymentLimiter, optionalAuth, asyn
                     bookingType: "parcel",
                     fromCity, toCity, senderName, senderPhone, senderEmail,
                     receiverName, receiverPhone, description, weightKg, declaredValueKobo, priceKobo,
-                    ownerId: req.user ? req.user.id : null
+                    ownerId: req.user ? req.user.id : ""
                 }
             })
         });
@@ -323,13 +325,13 @@ router.get("/flutterwave/verify/:txRef", async (req, res) => {
             bookingResult = await createPassengerBooking({
                 tripId: metadata.tripId,
                 terminalId: metadata.terminalId,
-                seatNumbers: metadata.seatNumbers,
-                sessionId: metadata.sessionId,
+                seatNumbers: metadata.seatNumbers.split(","), // reverses the join(",") done at initialize time
+                sessionId: metadata.sessionId || null,
                 passengerName: metadata.passengerName,
                 passengerEmail: metadata.passengerEmail,
                 passengerPhone: metadata.passengerPhone,
                 travelDate: metadata.travelDate,
-                ownerId: metadata.ownerId,
+                ownerId: metadata.ownerId || null,
                 paymentReference: transaction.tx_ref
             });
         } else if (metadata.bookingType === "parcel") {
@@ -345,7 +347,7 @@ router.get("/flutterwave/verify/:txRef", async (req, res) => {
                 weightKg: metadata.weightKg,
                 declaredValueKobo: metadata.declaredValueKobo,
                 priceKobo: metadata.priceKobo,
-                ownerId: metadata.ownerId,
+                ownerId: metadata.ownerId || null,
                 paymentReference: transaction.tx_ref
             });
         } else {
