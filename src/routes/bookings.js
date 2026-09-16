@@ -72,9 +72,41 @@ router.get("/track/:reference", async (req, res) => {
             [booking.id]
         );
 
+        // Who this booking is actually for, and which trip/route —
+        // shown at the top of the tracking page so it's immediately
+        // clear whose booking this is, not just an abstract reference.
+        let name = null;
+        let route = null;
+
+        if (booking.type === "passenger") {
+            const details = await pool.query(
+                `SELECT pb.passenger_name, r.from_city, r.to_city, t.departure_time
+                 FROM passenger_bookings pb
+                 JOIN trips t ON t.id = pb.trip_id
+                 JOIN routes r ON r.id = t.route_id
+                 WHERE pb.booking_id = $1`,
+                [booking.id]
+            );
+            if (details.rows.length > 0) {
+                name = details.rows[0].passenger_name;
+                route = `${details.rows[0].from_city} → ${details.rows[0].to_city} · ${details.rows[0].departure_time.slice(0, 5)}`;
+            }
+        } else {
+            const details = await pool.query(
+                "SELECT sender_name, from_city, to_city FROM parcel_bookings WHERE booking_id = $1",
+                [booking.id]
+            );
+            if (details.rows.length > 0) {
+                name = details.rows[0].sender_name;
+                route = `${details.rows[0].from_city} → ${details.rows[0].to_city}`;
+            }
+        }
+
         res.json({
             reference: booking.reference,
             type: booking.type,
+            name,
+            route,
             events: eventsResult.rows
         });
     } catch (err) {
