@@ -6,13 +6,13 @@
 // cancellation, etc.) — SMS is a notification layered on top of
 // something that already genuinely happened, not a gate on it.
 //
-// Uses Termii's shared "Termii" sender ID for now — works
-// immediately, no approval needed. Once your own branded sender ID
-// is approved (a separate request to Termii, takes some time), swap
-// TERMII_SENDER_ID below to your approved name.
+// Uses your real, approved Termii sender ID ("OE Alert") on their
+// DND route — this is what Termii actually approved for this
+// account. DND only works through the API (never through Termii's
+// own dashboard), which is exactly how this code calls it.
 
 const TERMII_API_KEY = process.env.TERMII_API_KEY;
-const TERMII_SENDER_ID = process.env.TERMII_SENDER_ID || "Termii";
+const TERMII_SENDER_ID = process.env.TERMII_SENDER_ID || "OE Alert";
 
 // Termii expects Nigerian numbers in international format without
 // the leading 0 or plus sign (e.g. 2348012345678). This converts
@@ -36,7 +36,7 @@ async function sendSMS(to, message) {
                 from: TERMII_SENDER_ID,
                 sms: message,
                 type: "plain",
-                channel: "generic"
+                channel: "dnd" // this specific sender ID is only approved on Termii's DND route
             })
         });
 
