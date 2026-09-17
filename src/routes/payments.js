@@ -26,6 +26,17 @@ const { paymentLimiter } = require("../rateLimiters");
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "https://tiahaleem.github.io/Fss";
 
+// Checks whether a trip's departure (this specific date + its daily
+// departure time) has already passed. A trip that departs at 6am is
+// perfectly bookable for tomorrow even at 11pm tonight — this only
+// blocks the exact date+time combination that's genuinely already gone.
+function hasTripDeparted(departureTime, travelDate) {
+    const [hours, minutes] = departureTime.split(":").map(Number);
+    const [year, month, day] = travelDate.split("-").map(Number);
+    const departureDatetime = new Date(year, month - 1, day, hours, minutes);
+    return departureDatetime <= new Date();
+}
+
 // =========================
 // POST /api/payments/initialize-passenger
 // =========================
@@ -40,12 +51,16 @@ router.post("/initialize-passenger", paymentLimiter, optionalAuth, async (req, r
         // Look up the real price server-side — never trust an amount
         // sent from the browser for what to actually charge.
         const tripResult = await pool.query(
-            `SELECT routes.price_kobo FROM trips JOIN routes ON routes.id = trips.route_id WHERE trips.id = $1`,
+            `SELECT routes.price_kobo, trips.departure_time FROM trips JOIN routes ON routes.id = trips.route_id WHERE trips.id = $1`,
             [tripId]
         );
 
         if (tripResult.rows.length === 0) {
             return res.status(404).json({ error: "That trip doesn't exist." });
+        }
+
+        if (hasTripDeparted(tripResult.rows[0].departure_time, travelDate)) {
+            return res.status(400).json({ error: "This trip has already departed for the selected date. Please choose a different date or trip." });
         }
 
         const totalKobo = tripResult.rows[0].price_kobo * seatNumbers.length;
@@ -201,12 +216,16 @@ router.post("/flutterwave/initialize-passenger", paymentLimiter, optionalAuth, a
         }
 
         const tripResult = await pool.query(
-            `SELECT routes.price_kobo FROM trips JOIN routes ON routes.id = trips.route_id WHERE trips.id = $1`,
+            `SELECT routes.price_kobo, trips.departure_time FROM trips JOIN routes ON routes.id = trips.route_id WHERE trips.id = $1`,
             [tripId]
         );
 
         if (tripResult.rows.length === 0) {
             return res.status(404).json({ error: "That trip doesn't exist." });
+        }
+
+        if (hasTripDeparted(tripResult.rows[0].departure_time, travelDate)) {
+            return res.status(400).json({ error: "This trip has already departed for the selected date. Please choose a different date or trip." });
         }
 
         const totalKobo = tripResult.rows[0].price_kobo * seatNumbers.length;
