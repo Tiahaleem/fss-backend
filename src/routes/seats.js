@@ -22,6 +22,25 @@ function todayDate() {
     return new Date().toISOString().split("T")[0];
 }
 
+// Checks whether a trip's departure (this specific date + its daily
+// departure time) has already passed. A trip that departs at 6am is
+// perfectly bookable for tomorrow even at 11pm tonight — this only
+// blocks the exact date+time combination that's genuinely already gone.
+async function hasTripDeparted(client, tripId, travelDate) {
+    const result = await client.query(
+        "SELECT departure_time FROM trips WHERE id = $1",
+        [tripId]
+    );
+
+    if (result.rows.length === 0) return false; // let the normal "trip not found" handling further down catch this
+
+    const [hours, minutes] = result.rows[0].departure_time.split(":").map(Number);
+    const [year, month, day] = travelDate.split("-").map(Number);
+    const departureDatetime = new Date(year, month - 1, day, hours, minutes);
+
+    return departureDatetime <= new Date();
+}
+
 // Deletes any hold for this seat+date that's already expired, so an
 // abandoned hold genuinely frees up instead of blocking forever.
 async function clearExpiredHold(client, tripId, travelDate, seatNumber) {
@@ -69,6 +88,10 @@ router.post("/:seatNumber/hold", async (req, res) => {
 
         if (!sessionId) {
             return res.status(400).json({ error: "sessionId is required." });
+        }
+
+        if (await hasTripDeparted(client, tripId, dateToUse)) {
+            return res.status(400).json({ error: "This trip has already departed for the selected date. Please choose a different date or trip." });
         }
 
         await clearExpiredHold(client, tripId, dateToUse, seatNumber);
