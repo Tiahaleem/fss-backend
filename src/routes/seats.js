@@ -18,8 +18,14 @@ const pool = require("../db");
 
 const HOLD_MINUTES = 10;
 
+// Only used as a fallback when a request doesn't specify a date at
+// all — real requests always send the customer's own local date now.
+// WAT is hardcoded (UTC+1) since this business operates in Nigeria,
+// rather than trusting whatever timezone the server itself happens
+// to run in.
 function todayDate() {
-    return new Date().toISOString().split("T")[0];
+    const watNow = new Date(Date.now() + 60 * 60 * 1000); // shift UTC forward by 1 hour to get WAT
+    return watNow.toISOString().split("T")[0];
 }
 
 // Checks whether a trip's departure (this specific date + its daily
@@ -36,7 +42,14 @@ async function hasTripDeparted(client, tripId, travelDate) {
 
     const [hours, minutes] = result.rows[0].departure_time.split(":").map(Number);
     const [year, month, day] = travelDate.split("-").map(Number);
-    const departureDatetime = new Date(year, month - 1, day, hours, minutes);
+
+    // departure_time is always entered and understood as West Africa
+    // Time (this business operates in Nigeria) — regardless of what
+    // timezone the server itself happens to run in. Building this as
+    // a genuine UTC timestamp (WAT is UTC+1, so subtract 1 hour) means
+    // the comparison against real "now" is correct no matter where
+    // this code is actually hosted.
+    const departureDatetime = new Date(Date.UTC(year, month - 1, day, hours, minutes) - 60 * 60 * 1000);
 
     return departureDatetime <= new Date();
 }
