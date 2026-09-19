@@ -16,6 +16,8 @@ function toClientShape(row) {
         address: row.address,
         phone: row.phone,
         hours: row.hours,
+        latitude: row.latitude !== null ? Number(row.latitude) : null,
+        longitude: row.longitude !== null ? Number(row.longitude) : null,
         status: row.status
     };
 }
@@ -65,17 +67,17 @@ router.get("/:id", async (req, res) => {
 // POST /api/terminals — create a new terminal
 router.post("/", requireAdmin, async (req, res) => {
     try {
-        const { city, name, address, phone, hours, status } = req.body;
+        const { city, name, address, phone, hours, latitude, longitude, status } = req.body;
 
         if (!city || !name || !address || !phone || !hours) {
             return res.status(400).json({ error: "city, name, address, phone, and hours are all required." });
         }
 
         const result = await pool.query(
-            `INSERT INTO terminals (city, name, address, phone, hours, status)
-             VALUES ($1, $2, $3, $4, $5, $6)
+            `INSERT INTO terminals (city, name, address, phone, hours, latitude, longitude, status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
              RETURNING *`,
-            [city, name, address, phone, hours, status || "active"]
+            [city, name, address, phone, hours, latitude || null, longitude || null, status || "active"]
         );
 
         res.status(201).json(toClientShape(result.rows[0]));
@@ -88,15 +90,15 @@ router.post("/", requireAdmin, async (req, res) => {
 // PUT /api/terminals/:id — update an existing terminal
 router.put("/:id", requireAdmin, async (req, res) => {
     try {
-        const { city, name, address, phone, hours, status } = req.body;
+        const { city, name, address, phone, hours, latitude, longitude, status } = req.body;
 
         const result = await pool.query(
             `UPDATE terminals
              SET city = $1, name = $2, address = $3, phone = $4,
-                 hours = $5, status = $6, updated_at = now()
-             WHERE id = $7
+                 hours = $5, latitude = $6, longitude = $7, status = $8, updated_at = now()
+             WHERE id = $9
              RETURNING *`,
-            [city, name, address, phone, hours, status, req.params.id]
+            [city, name, address, phone, hours, latitude || null, longitude || null, status, req.params.id]
         );
 
         if (result.rows.length === 0) {
