@@ -27,8 +27,10 @@ router.get("/send-departure-reminders", async (req, res) => {
 
     try {
         // Every passenger booking whose trip departs (today's date +
-        // that trip's time) within the next 2 hours, and hasn't
-        // already had its reminder sent.
+        // that trip's time, both understood as West Africa Time —
+        // this business operates in Nigeria, regardless of what
+        // timezone the database server itself runs in) within the
+        // next 2 hours, and hasn't already had its reminder sent.
         const result = await pool.query(
             `SELECT
                 pb.booking_id, pb.passenger_name, pb.passenger_email, pb.passenger_phone,
@@ -42,8 +44,8 @@ router.get("/send-departure-reminders", async (req, res) => {
              JOIN routes r ON r.id = t.route_id
              JOIN terminals term ON term.id = pb.terminal_id
              WHERE pb.reminder_sent_at IS NULL
-               AND pb.travel_date = CURRENT_DATE
-               AND (pb.travel_date + t.departure_time)::timestamp
+               AND pb.travel_date = (now() AT TIME ZONE 'Africa/Lagos')::date
+               AND (pb.travel_date + t.departure_time) AT TIME ZONE 'Africa/Lagos'
                    BETWEEN now() AND now() + interval '2 hours'`
         );
 
