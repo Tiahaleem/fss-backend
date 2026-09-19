@@ -153,11 +153,17 @@ router.post("/", requireAdmin, async (req, res) => {
             return res.status(400).json({ error: "That vehicle doesn't exist." });
         }
 
-        const conflict = await findVehicleConflict(vehicleId, time, routeId, null);
-        if (conflict) {
-            return res.status(409).json({
-                error: `This vehicle is already scheduled for the ${conflict.route} trip at ${conflict.time}, which overlaps with this time. Please choose a different vehicle or time.`
-            });
+        // An inactive trip isn't actually claiming the vehicle for
+        // anything real — no reason to block creating it that way
+        // just because some OTHER active trip already uses that
+        // vehicle at an overlapping time.
+        if ((status || "active") === "active") {
+            const conflict = await findVehicleConflict(vehicleId, time, routeId, null);
+            if (conflict) {
+                return res.status(409).json({
+                    error: `This vehicle is already scheduled for the ${conflict.route} trip at ${conflict.time}, which overlaps with this time. Please choose a different vehicle or time.`
+                });
+            }
         }
 
         const insertResult = await pool.query(
@@ -188,11 +194,17 @@ router.put("/:id", requireAdmin, async (req, res) => {
             return res.status(400).json({ error: "That vehicle doesn't exist." });
         }
 
-        const conflict = await findVehicleConflict(vehicleId, time, routeId, req.params.id);
-        if (conflict) {
-            return res.status(409).json({
-                error: `This vehicle is already scheduled for the ${conflict.route} trip at ${conflict.time}, which overlaps with this time. Please choose a different vehicle or time.`
-            });
+        // An inactive trip isn't actually claiming the vehicle for
+        // anything real — no reason to block setting it inactive
+        // just because some OTHER active trip already uses that
+        // vehicle at an overlapping time.
+        if (status === "active") {
+            const conflict = await findVehicleConflict(vehicleId, time, routeId, req.params.id);
+            if (conflict) {
+                return res.status(409).json({
+                    error: `This vehicle is already scheduled for the ${conflict.route} trip at ${conflict.time}, which overlaps with this time. Please choose a different vehicle or time.`
+                });
+            }
         }
 
         const updateResult = await pool.query(
