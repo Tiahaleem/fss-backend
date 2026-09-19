@@ -105,6 +105,8 @@ CREATE TABLE terminals (
     address     VARCHAR(255) NOT NULL,
     phone       VARCHAR(30)  NOT NULL,
     hours       VARCHAR(60)  NOT NULL,
+    latitude    DECIMAL(10, 7), -- for map display; nullable so existing terminals aren't broken until set
+    longitude   DECIMAL(10, 7),
     status      VARCHAR(10)  NOT NULL DEFAULT 'active'
                     CHECK (status IN ('active', 'inactive')),
     created_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
