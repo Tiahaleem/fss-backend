@@ -16,6 +16,9 @@ function toClientShape(row) {
         name: row.name,
         plateNumber: row.plate_number,
         seats: row.seats,
+        layout: row.layout,
+        hasAC: row.has_ac,
+        vehicleClass: row.vehicle_class,
         status: row.status
     };
 }
@@ -61,17 +64,17 @@ router.get("/:id", async (req, res) => {
 // POST /api/vehicles — add a new vehicle
 router.post("/", requireAdmin, async (req, res) => {
     try {
-        const { name, plateNumber, seats, status } = req.body;
+        const { name, plateNumber, seats, layout, hasAC, vehicleClass, status } = req.body;
 
         if (!name || !seats) {
             return res.status(400).json({ error: "name and seats are required." });
         }
 
         const result = await pool.query(
-            `INSERT INTO vehicles (name, plate_number, seats, status)
-             VALUES ($1, $2, $3, $4)
+            `INSERT INTO vehicles (name, plate_number, seats, layout, has_ac, vehicle_class, status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
              RETURNING *`,
-            [name, plateNumber || null, seats, status || "active"]
+            [name, plateNumber || null, seats, layout || null, hasAC !== false, vehicleClass || null, status || "active"]
         );
 
         res.status(201).json(toClientShape(result.rows[0]));
@@ -84,7 +87,7 @@ router.post("/", requireAdmin, async (req, res) => {
 // PUT /api/vehicles/:id — update an existing vehicle
 router.put("/:id", requireAdmin, async (req, res) => {
     try {
-        const { name, plateNumber, seats, status } = req.body;
+        const { name, plateNumber, seats, layout, hasAC, vehicleClass, status } = req.body;
 
         // Don't let a vehicle's capacity shrink below a seat number
         // that's already a real, paid booking — that would leave a
@@ -108,10 +111,10 @@ router.put("/:id", requireAdmin, async (req, res) => {
 
         const result = await pool.query(
             `UPDATE vehicles
-             SET name = $1, plate_number = $2, seats = $3, status = $4
-             WHERE id = $5
+             SET name = $1, plate_number = $2, seats = $3, layout = $4, has_ac = $5, vehicle_class = $6, status = $7
+             WHERE id = $8
              RETURNING *`,
-            [name, plateNumber || null, seats, status, req.params.id]
+            [name, plateNumber || null, seats, layout || null, hasAC !== false, vehicleClass || null, status, req.params.id]
         );
 
         if (result.rows.length === 0) {
