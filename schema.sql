@@ -136,6 +136,9 @@ CREATE TABLE vehicles (
     name            VARCHAR(80)  NOT NULL, -- e.g. "Honda Odyssey"
     plate_number    VARCHAR(30),
     seats           SMALLINT     NOT NULL,
+    layout          VARCHAR(20), -- e.g. "2-2-3" — the real physical seat arrangement, admin describes it since it varies by make/model even at the same seat count
+    has_ac          BOOLEAN      NOT NULL DEFAULT true,
+    vehicle_class   VARCHAR(50), -- e.g. "FSS Executive", "FSS Standard" — a service tier label, distinct from the plate number
     status          VARCHAR(10)  NOT NULL DEFAULT 'active'
                         CHECK (status IN ('active', 'inactive')),
     created_at      TIMESTAMPTZ  NOT NULL DEFAULT now()
