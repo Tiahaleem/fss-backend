@@ -222,10 +222,14 @@ router.get("/", requireAdmin, async (req, res) => {
                 pb.passenger_name, pb.passenger_phone,
                 (SELECT string_agg(seat_number, ', ' ORDER BY seat_number) FROM seat_holds WHERE booking_id = b.id) AS seat_numbers,
                 pab.sender_name, pab.sender_phone, pab.receiver_name, pab.receiver_phone,
-                pab.from_city, pab.to_city
+                COALESCE(pab.from_city, r.from_city) AS from_city,
+                COALESCE(pab.to_city, r.to_city) AS to_city,
+                t.departure_time
              FROM bookings b
              LEFT JOIN passenger_bookings pb ON pb.booking_id = b.id
              LEFT JOIN parcel_bookings pab ON pab.booking_id = b.id
+             LEFT JOIN trips t ON t.id = pb.trip_id
+             LEFT JOIN routes r ON r.id = t.route_id
              ORDER BY b.created_at DESC`
         );
 
