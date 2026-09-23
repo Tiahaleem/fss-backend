@@ -30,6 +30,9 @@ function toClientShape(row) {
         vehicleId: row.vehicle_id,
         vehicleName: row.vehicle_name,
         vehiclePlate: row.vehicle_plate,
+        vehicleLayout: row.vehicle_layout,
+        vehicleHasAC: row.vehicle_has_ac,
+        vehicleClass: row.vehicle_class,
         seats: row.total_seats,
         status: row.status
     };
@@ -37,7 +40,9 @@ function toClientShape(row) {
 
 const SELECT_WITH_ROUTE = `
     SELECT trips.*, routes.from_city, routes.to_city, routes.duration,
-           vehicles.name AS vehicle_name, vehicles.plate_number AS vehicle_plate
+           vehicles.name AS vehicle_name, vehicles.plate_number AS vehicle_plate,
+           vehicles.layout AS vehicle_layout, vehicles.has_ac AS vehicle_has_ac,
+           vehicles.vehicle_class AS vehicle_class
     FROM trips
     JOIN routes ON routes.id = trips.route_id
     LEFT JOIN vehicles ON vehicles.id = trips.vehicle_id
