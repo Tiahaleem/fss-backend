@@ -124,6 +124,16 @@ router.delete("/:id", requireAdmin, async (req, res) => {
 
         res.status(204).send();
     } catch (err) {
+        if (err.code === "23503") {
+            // Foreign key violation — a trip on this route still has
+            // real bookings attached. Deleting the route would try
+            // to cascade-delete that trip too, which the database
+            // correctly refuses since it would destroy real booking
+            // records. Inactive is the right move instead.
+            return res.status(409).json({
+                error: "This route has a trip with real bookings attached and can't be deleted. Set the route's status to Inactive instead — that hides it from customers without losing the booking records."
+            });
+        }
         console.error("DELETE /api/routes/:id failed:", err);
         res.status(500).json({ error: "Couldn't delete that route." });
     }
