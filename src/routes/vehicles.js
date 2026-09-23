@@ -86,6 +86,26 @@ router.put("/:id", requireAdmin, async (req, res) => {
     try {
         const { name, plateNumber, seats, status } = req.body;
 
+        // Don't let a vehicle's capacity shrink below a seat number
+        // that's already a real, paid booking — that would leave a
+        // paying customer's seat literally not existing anymore.
+        const conflictingBooking = await pool.query(
+            `SELECT sh.seat_number, r.from_city, r.to_city, t.departure_time
+             FROM seat_holds sh
+             JOIN trips t ON t.id = sh.trip_id
+             JOIN routes r ON r.id = t.route_id
+             WHERE t.vehicle_id = $1 AND sh.status = 'booked' AND sh.seat_number::int > $2
+             LIMIT 1`,
+            [req.params.id, seats]
+        );
+
+        if (conflictingBooking.rows.length > 0) {
+            const b = conflictingBooking.rows[0];
+            return res.status(409).json({
+                error: `Can't reduce to ${seats} seats — seat ${b.seat_number} is already booked on the ${b.from_city} → ${b.to_city} trip at ${b.departure_time.slice(0, 5)}.`
+            });
+        }
+
         const result = await pool.query(
             `UPDATE vehicles
              SET name = $1, plate_number = $2, seats = $3, status = $4
@@ -97,6 +117,15 @@ router.put("/:id", requireAdmin, async (req, res) => {
         if (result.rows.length === 0) {
             return res.status(404).json({ error: "Vehicle not found." });
         }
+
+        // A trip's seat count is a snapshot taken when it was
+        // created — without this, correcting a vehicle's real seat
+        // count here would leave every EXISTING trip using it stuck
+        // showing the old, wrong number forever.
+        await pool.query(
+            "UPDATE trips SET total_seats = $1 WHERE vehicle_id = $2",
+            [seats, req.params.id]
+        );
 
         res.json(toClientShape(result.rows[0]));
     } catch (err) {
