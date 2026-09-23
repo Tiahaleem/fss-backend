@@ -14,8 +14,8 @@
 const express = require("express");
 const router = express.Router();
 const pool = require("../db");
-const { sendDepartureReminderEmail } = require("../email");
-const { sendDepartureReminderSMS } = require("../sms");
+const { sendDepartureReminderEmail, sendAdvanceReminderEmail } = require("../email");
+const { sendDepartureReminderSMS, sendAdvanceReminderSMS } = require("../sms");
 
 const CRON_SECRET = process.env.CRON_SECRET;
 
@@ -79,7 +79,61 @@ router.get("/send-departure-reminders", async (req, res) => {
             if (emailResult.success) sentCount++;
         }
 
-        res.json({ checked: result.rows.length, sent: sentCount });
+        // The NEW early reminder — same idea, but 3 full days before
+        // the trip instead of 2 hours before. Tracked with its own
+        // separate "sent" column so a booking can genuinely get BOTH
+        // reminders, at their own separate times, without either one
+        // blocking the other.
+        const advanceResult = await pool.query(
+            `SELECT
+                pb.booking_id, pb.passenger_name, pb.passenger_email, pb.passenger_phone,
+                pb.travel_date,
+                b.reference,
+                r.from_city, r.to_city, t.departure_time,
+                term.name AS terminal_name,
+                (SELECT string_agg(seat_number, ', ' ORDER BY seat_number) FROM seat_holds WHERE booking_id = pb.booking_id) AS seat_numbers
+             FROM passenger_bookings pb
+             JOIN bookings b ON b.id = pb.booking_id
+             JOIN trips t ON t.id = pb.trip_id
+             JOIN routes r ON r.id = t.route_id
+             JOIN terminals term ON term.id = pb.terminal_id
+             WHERE pb.advance_reminder_sent_at IS NULL
+               AND pb.travel_date = (now() AT TIME ZONE 'Africa/Lagos')::date + interval '3 days'`
+        );
+
+        let advanceSentCount = 0;
+
+        for (const row of advanceResult.rows) {
+            const routeText = `${row.from_city} → ${row.to_city}`;
+            const departureTimeText = row.departure_time.slice(0, 5);
+            const travelDateText = new Date(row.travel_date).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
+
+            const advanceEmailResult = await sendAdvanceReminderEmail(row.passenger_email, {
+                passengerName: row.passenger_name,
+                reference: row.reference,
+                route: routeText,
+                travelDate: travelDateText,
+                departureTime: departureTimeText,
+                pickupTerminal: row.terminal_name,
+                seatNumbers: (row.seat_numbers || "").split(", ").filter(Boolean)
+            });
+
+            await sendAdvanceReminderSMS(row.passenger_phone, {
+                route: routeText,
+                travelDate: travelDateText,
+                departureTime: departureTimeText,
+                pickupTerminal: row.terminal_name
+            });
+
+            await pool.query("UPDATE passenger_bookings SET advance_reminder_sent_at = now() WHERE booking_id = $1", [row.booking_id]);
+
+            if (advanceEmailResult.success) advanceSentCount++;
+        }
+
+        res.json({
+            checked: result.rows.length, sent: sentCount,
+            advanceChecked: advanceResult.rows.length, advanceSent: advanceSentCount
+        });
     } catch (err) {
         console.error("GET /api/cron/send-departure-reminders failed:", err.message);
         res.status(500).json({ error: "Couldn't run the reminder check." });
