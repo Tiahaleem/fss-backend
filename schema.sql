@@ -234,7 +234,8 @@ CREATE TABLE passenger_bookings (
     passenger_email VARCHAR(255) NOT NULL,
     passenger_phone VARCHAR(30)  NOT NULL,
     travel_date     DATE         NOT NULL,
-    reminder_sent_at TIMESTAMPTZ -- NULL until the departure-reminder email goes out; stops it sending twice
+    reminder_sent_at TIMESTAMPTZ, -- NULL until the departure-reminder email goes out; stops it sending twice
+    advance_reminder_sent_at TIMESTAMPTZ -- NULL until the 3-days-before reminder goes out — tracked separately from the near-departure one above
 );
 
 
