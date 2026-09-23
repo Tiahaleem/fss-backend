@@ -66,6 +66,10 @@ async function sendDepartureReminderSMS(to, { route, departureTime, pickupTermin
     return sendSMS(to, `FSS Transport: Reminder - your ${route} trip departs at ${departureTime} today from ${pickupTerminal}. Arrive 15-20 mins early.`);
 }
 
+async function sendAdvanceReminderSMS(to, { route, travelDate, departureTime, pickupTerminal }) {
+    return sendSMS(to, `FSS Transport: Your ${route} trip is coming up in 3 days, on ${travelDate} at ${departureTime}, from ${pickupTerminal}.`);
+}
+
 async function sendCancellationSMS(to, { reference }) {
     return sendSMS(to, `FSS Transport: Booking ${reference} has been cancelled. Contact support if this wasn't you.`);
 }
@@ -79,6 +83,7 @@ module.exports = {
     sendBookingReceiptSMS,
     sendDepartedSMS,
     sendDepartureReminderSMS,
+    sendAdvanceReminderSMS,
     sendCancellationSMS,
     sendRefundSMS
 };
