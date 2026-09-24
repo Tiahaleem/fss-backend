@@ -77,19 +77,25 @@ router.get("/track/:reference", async (req, res) => {
         // clear whose booking this is, not just an abstract reference.
         let name = null;
         let route = null;
+        let driverName = null;
+        let driverPhone = null;
 
         if (booking.type === "passenger") {
             const details = await pool.query(
-                `SELECT pb.passenger_name, r.from_city, r.to_city, t.departure_time
+                `SELECT pb.passenger_name, r.from_city, r.to_city, t.departure_time,
+                        d.name AS driver_name, d.phone AS driver_phone
                  FROM passenger_bookings pb
                  JOIN trips t ON t.id = pb.trip_id
                  JOIN routes r ON r.id = t.route_id
+                 LEFT JOIN drivers d ON d.id = t.driver_id
                  WHERE pb.booking_id = $1`,
                 [booking.id]
             );
             if (details.rows.length > 0) {
                 name = details.rows[0].passenger_name;
                 route = `${details.rows[0].from_city} → ${details.rows[0].to_city} · ${details.rows[0].departure_time.slice(0, 5)}`;
+                driverName = details.rows[0].driver_name;
+                driverPhone = details.rows[0].driver_phone;
             }
         } else {
             const details = await pool.query(
@@ -107,6 +113,8 @@ router.get("/track/:reference", async (req, res) => {
             type: booking.type,
             name,
             route,
+            driverName,
+            driverPhone,
             events: eventsResult.rows
         });
     } catch (err) {
@@ -129,7 +137,9 @@ router.get("/:reference/ticket", async (req, res) => {
                 b.reference, b.status, b.price_kobo,
                 pb.passenger_name, pb.travel_date,
                 r.from_city, r.to_city, r.duration,
-                t.departure_time, t.vehicle,
+                t.departure_time,
+                v.name AS vehicle_name, v.plate_number AS vehicle_plate,
+                d.name AS driver_name, d.phone AS driver_phone,
                 term.name AS terminal_name, term.address AS terminal_address,
                 (SELECT string_agg(seat_number, ', ' ORDER BY seat_number) FROM seat_holds WHERE booking_id = b.id) AS seat_numbers
              FROM bookings b
@@ -137,6 +147,8 @@ router.get("/:reference/ticket", async (req, res) => {
              JOIN trips t ON t.id = pb.trip_id
              JOIN routes r ON r.id = t.route_id
              JOIN terminals term ON term.id = pb.terminal_id
+             LEFT JOIN vehicles v ON v.id = t.vehicle_id
+             LEFT JOIN drivers d ON d.id = t.driver_id
              WHERE b.reference = $1 AND b.type = 'passenger'`,
             [req.params.reference.toUpperCase()]
         );
@@ -155,7 +167,10 @@ router.get("/:reference/ticket", async (req, res) => {
             travelDate: row.travel_date,
             departureTime: row.departure_time.slice(0, 5),
             duration: row.duration,
-            vehicle: row.vehicle,
+            vehicleName: row.vehicle_name,
+            vehiclePlate: row.vehicle_plate,
+            driverName: row.driver_name,
+            driverPhone: row.driver_phone,
             seatNumbers: row.seat_numbers,
             terminalName: row.terminal_name,
             terminalAddress: row.terminal_address,
