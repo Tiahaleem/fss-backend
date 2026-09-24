@@ -33,6 +33,9 @@ function toClientShape(row) {
         vehicleLayout: row.vehicle_layout,
         vehicleHasAC: row.vehicle_has_ac,
         vehicleClass: row.vehicle_class,
+        driverId: row.driver_id,
+        driverName: row.driver_name,
+        driverPhone: row.driver_phone,
         seats: row.total_seats,
         status: row.status
     };
@@ -42,10 +45,12 @@ const SELECT_WITH_ROUTE = `
     SELECT trips.*, routes.from_city, routes.to_city, routes.duration,
            vehicles.name AS vehicle_name, vehicles.plate_number AS vehicle_plate,
            vehicles.layout AS vehicle_layout, vehicles.has_ac AS vehicle_has_ac,
-           vehicles.vehicle_class AS vehicle_class
+           vehicles.vehicle_class AS vehicle_class,
+           drivers.name AS driver_name, drivers.phone AS driver_phone
     FROM trips
     JOIN routes ON routes.id = trips.route_id
     LEFT JOIN vehicles ON vehicles.id = trips.vehicle_id
+    LEFT JOIN drivers ON drivers.id = trips.driver_id
 `;
 
 // "11h 30m" -> 690. Handles "11h", "30m", or "11h 30m" — whatever's present.
@@ -147,7 +152,7 @@ router.get("/:id", async (req, res) => {
 // POST /api/trips — create a new trip on an existing route
 router.post("/", requireAdmin, async (req, res) => {
     try {
-        const { routeId, time, vehicleId, status } = req.body;
+        const { routeId, time, vehicleId, driverId, status } = req.body;
 
         if (!routeId || !time || !vehicleId) {
             return res.status(400).json({ error: "routeId, time, and vehicleId are all required." });
@@ -156,6 +161,16 @@ router.post("/", requireAdmin, async (req, res) => {
         const vehicleResult = await pool.query("SELECT seats FROM vehicles WHERE id = $1", [vehicleId]);
         if (vehicleResult.rows.length === 0) {
             return res.status(400).json({ error: "That vehicle doesn't exist." });
+        }
+
+        // Driver assignment is optional — a trip can exist before a
+        // specific driver is decided, but if one IS given, it must
+        // be real.
+        if (driverId) {
+            const driverResult = await pool.query("SELECT id FROM drivers WHERE id = $1", [driverId]);
+            if (driverResult.rows.length === 0) {
+                return res.status(400).json({ error: "That driver doesn't exist." });
+            }
         }
 
         // An inactive trip isn't actually claiming the vehicle for
@@ -172,10 +187,10 @@ router.post("/", requireAdmin, async (req, res) => {
         }
 
         const insertResult = await pool.query(
-            `INSERT INTO trips (route_id, departure_time, vehicle_id, total_seats, status)
-             VALUES ($1, $2, $3, $4, $5)
+            `INSERT INTO trips (route_id, departure_time, vehicle_id, driver_id, total_seats, status)
+             VALUES ($1, $2, $3, $4, $5, $6)
              RETURNING id`,
-            [routeId, time, vehicleId, vehicleResult.rows[0].seats, status || "active"]
+            [routeId, time, vehicleId, driverId || null, vehicleResult.rows[0].seats, status || "active"]
         );
 
         const full = await pool.query(SELECT_WITH_ROUTE + " WHERE trips.id = $1", [insertResult.rows[0].id]);
@@ -192,11 +207,18 @@ router.post("/", requireAdmin, async (req, res) => {
 // PUT /api/trips/:id — update an existing trip
 router.put("/:id", requireAdmin, async (req, res) => {
     try {
-        const { routeId, time, vehicleId, status } = req.body;
+        const { routeId, time, vehicleId, driverId, status } = req.body;
 
         const vehicleResult = await pool.query("SELECT seats FROM vehicles WHERE id = $1", [vehicleId]);
         if (vehicleResult.rows.length === 0) {
             return res.status(400).json({ error: "That vehicle doesn't exist." });
+        }
+
+        if (driverId) {
+            const driverResult = await pool.query("SELECT id FROM drivers WHERE id = $1", [driverId]);
+            if (driverResult.rows.length === 0) {
+                return res.status(400).json({ error: "That driver doesn't exist." });
+            }
         }
 
         // An inactive trip isn't actually claiming the vehicle for
@@ -214,11 +236,11 @@ router.put("/:id", requireAdmin, async (req, res) => {
 
         const updateResult = await pool.query(
             `UPDATE trips
-             SET route_id = $1, departure_time = $2, vehicle_id = $3,
-                 total_seats = $4, status = $5, updated_at = now()
-             WHERE id = $6
+             SET route_id = $1, departure_time = $2, vehicle_id = $3, driver_id = $4,
+                 total_seats = $5, status = $6, updated_at = now()
+             WHERE id = $7
              RETURNING id`,
-            [routeId, time, vehicleId, vehicleResult.rows[0].seats, status, req.params.id]
+            [routeId, time, vehicleId, driverId || null, vehicleResult.rows[0].seats, status, req.params.id]
         );
 
         if (updateResult.rows.length === 0) {
