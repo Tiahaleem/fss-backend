@@ -16,6 +16,7 @@ const { paystackRequest } = require("../paystack");
 const { flutterwaveRequest } = require("../flutterwave");
 const { sendCancellationEmail, sendRefundEmail } = require("../email");
 const { sendCancellationSMS, sendRefundSMS } = require("../sms");
+const { notifyWaitlist } = require("./waitlist");
 
 // =========================
 // POST /api/bookings/passenger — ADMIN ONLY now
@@ -295,8 +296,20 @@ router.post("/:reference/cancel", requireAuth, async (req, res) => {
         // For a passenger booking, actually free the seats back up —
         // deleting the seat_holds rows makes them immediately
         // available for someone else to select.
+        let seatsReleased = 0;
+        let releasedTripId = null;
+        let releasedTravelDate = null;
+
         if (booking.type === "passenger") {
-            await client.query("DELETE FROM seat_holds WHERE booking_id = $1", [booking.id]);
+            const deletedSeats = await client.query(
+                "DELETE FROM seat_holds WHERE booking_id = $1 RETURNING trip_id, travel_date",
+                [booking.id]
+            );
+            seatsReleased = deletedSeats.rows.length;
+            if (deletedSeats.rows.length > 0) {
+                releasedTripId = deletedSeats.rows[0].trip_id;
+                releasedTravelDate = deletedSeats.rows[0].travel_date;
+            }
         }
 
         await client.query("UPDATE bookings SET status = 'cancelled' WHERE id = $1", [booking.id]);
@@ -355,6 +368,10 @@ router.post("/:reference/cancel", requireAuth, async (req, res) => {
 
             await sendCancellationEmail(contactEmail, { name: contactName, reference: booking.reference, description });
             await sendCancellationSMS(contactPhone, { reference: booking.reference });
+
+            if (booking.type === "passenger" && releasedTripId) {
+                await notifyWaitlist(releasedTripId, releasedTravelDate, seatsReleased);
+            }
         } catch (emailErr) {
             console.error("Cancellation email failed:", emailErr.message);
         }
