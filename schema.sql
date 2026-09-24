@@ -145,11 +145,23 @@ CREATE TABLE vehicles (
 );
 
 
+CREATE TABLE drivers (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name            VARCHAR(80)  NOT NULL,
+    license_number  VARCHAR(30),
+    phone           VARCHAR(30)  NOT NULL,
+    status          VARCHAR(10)  NOT NULL DEFAULT 'active'
+                        CHECK (status IN ('active', 'inactive')),
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+
 CREATE TABLE trips (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     route_id        UUID NOT NULL REFERENCES routes(id) ON DELETE CASCADE,
     departure_time  TIME NOT NULL, -- e.g. 06:00 — the daily recurring time
     vehicle_id      UUID REFERENCES vehicles(id), -- the real, specific vehicle assigned to this trip
+    driver_id       UUID REFERENCES drivers(id), -- the real, specific driver assigned to this trip
     total_seats     SMALLINT    NOT NULL,
     status          VARCHAR(10) NOT NULL DEFAULT 'active'
                         CHECK (status IN ('active', 'inactive')),
@@ -159,6 +171,7 @@ CREATE TABLE trips (
 
 CREATE INDEX idx_trips_route_id ON trips(route_id);
 CREATE INDEX idx_trips_vehicle_id ON trips(vehicle_id);
+CREATE INDEX idx_trips_driver_id ON trips(driver_id);
 
 
 -- =====================================================================
