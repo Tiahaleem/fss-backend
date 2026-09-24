@@ -4,6 +4,36 @@
 
 require("dotenv").config();
 
+const { sendErrorAlert } = require("./alerts");
+
+// Every route file already logs real errors via console.error in
+// its catch blocks — overriding it here means every one of those
+// existing calls ALSO emails the admin, without needing to go
+// through and individually change dozens of files. The original
+// console.error still runs first, so server logs look exactly the
+// same as before.
+const originalConsoleError = console.error.bind(console);
+console.error = (...args) => {
+    originalConsoleError(...args);
+
+    const context = typeof args[0] === "string" ? args[0] : "Unknown error";
+    const errorArg = args.find(a => a instanceof Error) || args[1] || new Error(String(args[0]));
+    sendErrorAlert(context, errorArg);
+};
+
+// Belt-and-suspenders: catches genuinely uncaught errors that never
+// even reached a try/catch at all, which console.error alone
+// wouldn't see.
+process.on("uncaughtException", (err) => {
+    originalConsoleError("Uncaught exception:", err);
+    sendErrorAlert("Uncaught exception", err);
+});
+
+process.on("unhandledRejection", (reason) => {
+    originalConsoleError("Unhandled promise rejection:", reason);
+    sendErrorAlert("Unhandled promise rejection", reason instanceof Error ? reason : new Error(String(reason)));
+});
+
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
