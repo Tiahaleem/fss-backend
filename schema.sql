@@ -156,6 +156,20 @@ CREATE TABLE drivers (
 );
 
 
+CREATE TABLE promo_codes (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code            VARCHAR(30)  NOT NULL UNIQUE, -- always stored/matched in uppercase, e.g. "WELCOME10"
+    discount_type   VARCHAR(10)  NOT NULL CHECK (discount_type IN ('percentage', 'fixed')),
+    discount_value  INTEGER      NOT NULL, -- a % (e.g. 10) if percentage, or kobo (e.g. 500000 = ₦5,000) if fixed
+    max_uses        INTEGER, -- NULL = unlimited
+    times_used      INTEGER      NOT NULL DEFAULT 0,
+    expires_at      TIMESTAMPTZ, -- NULL = never expires
+    status          VARCHAR(10)  NOT NULL DEFAULT 'active'
+                        CHECK (status IN ('active', 'inactive')),
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+
 CREATE TABLE trips (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     route_id        UUID NOT NULL REFERENCES routes(id) ON DELETE CASCADE,
