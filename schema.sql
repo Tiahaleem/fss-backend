@@ -188,6 +188,22 @@ CREATE INDEX idx_trips_vehicle_id ON trips(vehicle_id);
 CREATE INDEX idx_trips_driver_id ON trips(driver_id);
 
 
+CREATE TABLE waitlist_entries (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    trip_id         UUID NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+    travel_date     DATE NOT NULL, -- same trip, different day = independent waitlist, matching how seat_holds works
+    name            VARCHAR(100) NOT NULL,
+    email           VARCHAR(255) NOT NULL,
+    phone           VARCHAR(30)  NOT NULL,
+    seats_wanted    SMALLINT     NOT NULL,
+    status          VARCHAR(10)  NOT NULL DEFAULT 'waiting'
+                        CHECK (status IN ('waiting', 'notified')),
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_waitlist_trip_date ON waitlist_entries(trip_id, travel_date);
+
+
 -- =====================================================================
 -- BOOKINGS (shared parent table)
 -- Replaces: getBookings() / saveBookings()
