@@ -23,7 +23,7 @@ function generateReference(prefix) {
 
 async function createPassengerBooking({
     tripId, terminalId, seatNumbers, sessionId,
-    passengerName, passengerEmail, passengerPhone, travelDate, ownerId, paymentReference
+    passengerName, passengerEmail, passengerPhone, travelDate, ownerId, paymentReference, overridePriceKobo
 }) {
     if (!tripId || !terminalId || !Array.isArray(seatNumbers) || seatNumbers.length === 0 ||
         !passengerName || !passengerEmail || !passengerPhone || !travelDate) {
@@ -52,7 +52,13 @@ async function createPassengerBooking({
         }
 
         const pricePerSeatKobo = tripResult.rows[0].price_kobo;
-        const totalPriceKobo = pricePerSeatKobo * seatNumbers.length;
+        // A promo code, if one was actually applied, means the
+        // customer genuinely paid less than the full seat price —
+        // the booking record needs to reflect what was REALLY
+        // charged, not silently show the original full amount.
+        const totalPriceKobo = overridePriceKobo !== undefined && overridePriceKobo !== null
+            ? overridePriceKobo
+            : pricePerSeatKobo * seatNumbers.length;
         const reference = generateReference("FSS");
 
         const bookingResult = await client.query(
