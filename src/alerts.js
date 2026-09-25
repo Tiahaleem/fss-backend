@@ -14,7 +14,7 @@ const { Resend } = require("resend");
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 const FROM_EMAIL = "FSS Transport <noreply@fsstransport.com.ng>";
-const ADMIN_ALERT_EMAIL = process.env.ADMIN_ALERT_EMAIL || "fsstranportltd@gmail.com";
+const ADMIN_ALERT_EMAIL = process.env.ADMIN_ALERT_EMAIL || "fsstransportltd@gmail.com";
 const COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes per distinct error message
 
 const lastAlertedAt = new Map();
