@@ -15,7 +15,7 @@ const { requireAdmin } = require("../middleware/requireAuth");
 const express = require("express");
 const router = express.Router();
 const pool = require("../db");
-const { sendNewChatAlertEmail } = require("../email");
+const { sendNewChatAlertEmail, sendChatReplyEmail } = require("../email");
 
 function conversationShape(row) {
     return {
@@ -65,12 +65,23 @@ router.post("/conversations", async (req, res) => {
             [conversation.id, message]
         );
 
+        // An immediate, automatic first reply — not a real answer,
+        // just an honest acknowledgment so the customer isn't left
+        // staring at silence while waiting for a real person.
+        await pool.query(
+            "INSERT INTO chat_messages (conversation_id, sender, message) VALUES ($1, 'admin', $2)",
+            [conversation.id, `Hi ${customerName}, thanks for reaching out! We'll get right back to you on your enquiry.`]
+        );
+
         // A real, immediate heads-up to the admin's own inbox — the
         // closest a solo operator can get to "24/7," short of
-        // literally staffing it around the clock.
+        // literally staffing it around the clock. Links straight to
+        // THIS conversation, already open, so replying is one click
+        // rather than hunting for it in the inbox list first.
         sendNewChatAlertEmail(process.env.ADMIN_ALERT_EMAIL || "fsstransportltd@gmail.com", {
             customerName,
-            message
+            message,
+            conversationId: conversation.id
         }).catch(() => {}); // never let an alert failure block the actual conversation from starting
 
         res.status(201).json({ conversationId: conversation.id });
@@ -194,7 +205,7 @@ router.post("/conversations/:id/reply", requireAdmin, async (req, res) => {
             return res.status(400).json({ error: "message is required." });
         }
 
-        const convCheck = await pool.query("SELECT id FROM chat_conversations WHERE id = $1", [req.params.id]);
+        const convCheck = await pool.query("SELECT id, customer_name, customer_email FROM chat_conversations WHERE id = $1", [req.params.id]);
         if (convCheck.rows.length === 0) {
             return res.status(404).json({ error: "Conversation not found." });
         }
@@ -205,6 +216,18 @@ router.post("/conversations/:id/reply", requireAdmin, async (req, res) => {
         );
 
         await pool.query("UPDATE chat_conversations SET last_message_at = now() WHERE id = $1", [req.params.id]);
+
+        // Not everyone has the widget open when a reply comes in —
+        // an email means they actually see it, not just the site.
+        // Only possible for customers who left an address in the
+        // first place; the widget makes this optional.
+        const conv = convCheck.rows[0];
+        if (conv.customer_email) {
+            sendChatReplyEmail(conv.customer_email, {
+                customerName: conv.customer_name,
+                message: message.trim()
+            }).catch(() => {}); // never let an email failure block the actual reply from sending
+        }
 
         res.status(201).json({ sent: true });
     } catch (err) {
