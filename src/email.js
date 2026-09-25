@@ -52,7 +52,7 @@ function wrapper(bodyHtml) {
 </td></tr>
 ${bodyHtml}
 <tr><td style="background-color:#f7fafc; padding:24px 32px; border-top:1px solid #e7edf3;">
-<p style="margin:0 0 8px; color:#64748b; font-size:12px; text-align:center;">Questions? Contact <a href="mailto:fsstranportltd@gmail.com" style="color:#08b6d6; text-decoration:none;">fsstranportltd@gmail.com</a></p>
+<p style="margin:0 0 8px; color:#64748b; font-size:12px; text-align:center;">Questions? Contact <a href="mailto:fsstransportltd@gmail.com" style="color:#08b6d6; text-decoration:none;">fsstransportltd@gmail.com</a></p>
 <p style="margin:0; color:#94a3b8; font-size:11px; text-align:center;">FSS Transport Limited · 23 Jibowu Street, Yaba, Lagos, Nigeria</p>
 </td></tr>
 </table>
