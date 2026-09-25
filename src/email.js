@@ -20,7 +20,7 @@ const { Resend } = require("resend");
 const resend = new Resend(process.env.RESEND_API_KEY);
 const FROM_EMAIL = "FSS Transport <noreply@fsstransport.com.ng>"; // your own verified domain — works for every real customer now
 const LOGO_URL = "https://tiahaleem.github.io/Fss/img/ffs_bg_removal.png";
-const SITE_URL = "https://tiahaleem.github.io/Fss";
+const SITE_URL = "https://fsstransport.com.ng";
 
 // Wraps every send with the same error handling — Resend returns
 // errors as { error: {...} } rather than always throwing, so both
@@ -183,6 +183,31 @@ async function sendDepartedEmail(to, { passengerName, reference, route, departed
     return send(to, `You're on your way — ${reference}`, html);
 }
 
+async function sendWaitlistNotificationEmail(to, { name, route, travelDate, departureTime, tripId, travelDateRaw }) {
+    const html = wrapper(`
+<tr><td style="padding:32px 32px 0;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td style="background-color:#e6f7fa; border-radius:12px; padding:20px 24px;">
+<p style="margin:0; color:#0891a8; font-size:14px; font-weight:bold; letter-spacing:.5px;">A SEAT JUST OPENED UP</p>
+<p style="margin:8px 0 0; color:#0f172a; font-size:22px; font-weight:bold;">${route} · ${travelDate}</p>
+</td></tr></table>
+</td></tr>
+<tr><td style="padding:28px 32px 0;">
+<p style="margin:0 0 6px; color:#0f172a; font-size:18px; font-weight:bold;">Good news, ${name || "there"}!</p>
+<p style="margin:0; color:#64748b; font-size:14px; line-height:1.6;">A seat just opened up on the trip you were waiting for — departing at ${departureTime} on ${travelDate}. Seats go fast once a trip fills up again, so it's worth booking soon if you still want it.</p>
+</td></tr>
+<tr><td style="padding:28px 32px;" align="center">
+<table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="background-color:#08b6d6; border-radius:50px;">
+<a href="${SITE_URL}/select_a_seat.html?trip=${encodeURIComponent(tripId)}&date=${encodeURIComponent(travelDateRaw)}" style="display:inline-block; padding:14px 32px; color:#ffffff; font-size:14px; font-weight:bold; text-decoration:none;">Book This Seat Now</a>
+</td></tr></table>
+</td></tr>
+<tr><td style="padding:0 32px 28px;">
+<p style="margin:0; color:#94a3b8; font-size:12px; text-align:center;">This spot isn't reserved for you — it's first come, first served, same as any other seat.</p>
+</td></tr>
+    `);
+
+    return send(to, `A seat just opened up — ${route} on ${travelDate}`, html);
+}
+
 async function sendAdvanceReminderEmail(to, { passengerName, reference, route, travelDate, departureTime, pickupTerminal, seatNumbers }) {
     const html = wrapper(`
 <tr><td style="padding:32px 32px 0;">
@@ -289,6 +314,29 @@ async function sendRefundEmail(to, { name, reference, amount }) {
     return send(to, `Refund processed — ${reference}`, html);
 }
 
+async function sendNewChatAlertEmail(to, { customerName, message }) {
+    const html = wrapper(`
+<tr><td style="padding:32px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td style="background-color:#e6f7fa; border-radius:12px; padding:20px 24px;">
+<p style="margin:0; color:#0891a8; font-size:14px; font-weight:bold; letter-spacing:.5px;">NEW LIVE CHAT MESSAGE</p>
+<p style="margin:8px 0 0; color:#0f172a; font-size:18px; font-weight:bold;">${customerName} just started a conversation</p>
+</td></tr></table>
+</td></tr>
+<tr><td style="padding:0 32px 20px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e7edf3; border-radius:12px;">
+<tr><td style="padding:16px 20px;"><p style="margin:0; color:#64748b; font-size:13px;">Their message</p><p style="margin:6px 0 0; color:#0f172a; font-size:15px;">${message}</p></td></tr>
+</table>
+</td></tr>
+<tr><td style="padding:0 32px 28px;" align="center">
+<table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="background-color:#08b6d6; border-radius:50px;">
+<a href="${SITE_URL}/admin-chat.html" style="display:inline-block; padding:14px 32px; color:#ffffff; font-size:14px; font-weight:bold; text-decoration:none;">Reply Now</a>
+</td></tr></table>
+</td></tr>
+    `);
+
+    return send(to, `💬 New chat from ${customerName}`, html);
+}
+
 module.exports = {
     sendVerificationEmail,
     sendPassengerReceiptEmail,
@@ -296,6 +344,8 @@ module.exports = {
     sendDepartedEmail,
     sendDepartureReminderEmail,
     sendAdvanceReminderEmail,
+    sendWaitlistNotificationEmail,
+    sendNewChatAlertEmail,
     sendCancellationEmail,
     sendRefundEmail,
     sendPasswordResetEmail
