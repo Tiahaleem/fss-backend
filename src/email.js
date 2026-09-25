@@ -314,7 +314,28 @@ async function sendRefundEmail(to, { name, reference, amount }) {
     return send(to, `Refund processed — ${reference}`, html);
 }
 
-async function sendNewChatAlertEmail(to, { customerName, message }) {
+async function sendChatReplyEmail(to, { customerName, message }) {
+    const html = wrapper(`
+<tr><td style="padding:32px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td style="background-color:#e6f7fa; border-radius:12px; padding:20px 24px;">
+<p style="margin:0; color:#0891a8; font-size:14px; font-weight:bold; letter-spacing:.5px;">NEW REPLY</p>
+<p style="margin:8px 0 0; color:#0f172a; font-size:18px; font-weight:bold;">FSS Transport replied to your message</p>
+</td></tr></table>
+</td></tr>
+<tr><td style="padding:0 32px 20px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e7edf3; border-radius:12px;">
+<tr><td style="padding:16px 20px;"><p style="margin:0; color:#64748b; font-size:13px;">Their reply</p><p style="margin:6px 0 0; color:#0f172a; font-size:15px;">${message}</p></td></tr>
+</table>
+</td></tr>
+<tr><td style="padding:0 32px 28px;" align="center">
+<p style="margin:0; color:#64748b; font-size:13px;">Reply on the site to keep the conversation going — just reopen the chat widget.</p>
+</td></tr>
+    `);
+
+    return send(to, `FSS Transport replied to your message`, html);
+}
+
+async function sendNewChatAlertEmail(to, { customerName, message, conversationId }) {
     const html = wrapper(`
 <tr><td style="padding:32px;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td style="background-color:#e6f7fa; border-radius:12px; padding:20px 24px;">
@@ -329,7 +350,7 @@ async function sendNewChatAlertEmail(to, { customerName, message }) {
 </td></tr>
 <tr><td style="padding:0 32px 28px;" align="center">
 <table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="background-color:#08b6d6; border-radius:50px;">
-<a href="${SITE_URL}/admin-chat.html" style="display:inline-block; padding:14px 32px; color:#ffffff; font-size:14px; font-weight:bold; text-decoration:none;">Reply Now</a>
+<a href="${SITE_URL}/admin-chat.html?conversation=${conversationId}" style="display:inline-block; padding:14px 32px; color:#ffffff; font-size:14px; font-weight:bold; text-decoration:none;">Reply Now</a>
 </td></tr></table>
 </td></tr>
     `);
@@ -346,6 +367,7 @@ module.exports = {
     sendAdvanceReminderEmail,
     sendWaitlistNotificationEmail,
     sendNewChatAlertEmail,
+    sendChatReplyEmail,
     sendCancellationEmail,
     sendRefundEmail,
     sendPasswordResetEmail
