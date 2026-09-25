@@ -68,7 +68,7 @@ router.post("/conversations", async (req, res) => {
         // A real, immediate heads-up to the admin's own inbox — the
         // closest a solo operator can get to "24/7," short of
         // literally staffing it around the clock.
-        sendNewChatAlertEmail(process.env.ADMIN_ALERT_EMAIL || "fsstranportltd@gmail.com", {
+        sendNewChatAlertEmail(process.env.ADMIN_ALERT_EMAIL || "fsstransportltd@gmail.com", {
             customerName,
             message
         }).catch(() => {}); // never let an alert failure block the actual conversation from starting
