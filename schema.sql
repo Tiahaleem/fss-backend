@@ -204,6 +204,28 @@ CREATE TABLE waitlist_entries (
 CREATE INDEX idx_waitlist_trip_date ON waitlist_entries(trip_id, travel_date);
 
 
+CREATE TABLE chat_conversations (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    customer_name   VARCHAR(100) NOT NULL,
+    customer_email  VARCHAR(255),
+    status          VARCHAR(10)  NOT NULL DEFAULT 'open'
+                        CHECK (status IN ('open', 'closed')),
+    unread_by_admin BOOLEAN      NOT NULL DEFAULT true, -- flips true again whenever the customer sends a new message
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    last_message_at TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+CREATE TABLE chat_messages (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    conversation_id UUID NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+    sender          VARCHAR(10)  NOT NULL CHECK (sender IN ('customer', 'admin')),
+    message         TEXT         NOT NULL,
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_chat_messages_conversation ON chat_messages(conversation_id, created_at);
+
+
 -- =====================================================================
 -- BOOKINGS (shared parent table)
 -- Replaces: getBookings() / saveBookings()
