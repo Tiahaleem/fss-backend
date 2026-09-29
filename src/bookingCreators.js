@@ -114,13 +114,20 @@ async function createPassengerBooking({
         const routeText = `${tripResult.rows[0].from_city} → ${tripResult.rows[0].to_city}`;
         const priceText = `₦${(totalPriceKobo / 100).toLocaleString()}`;
 
+        // A real, admin-editable policy — not hardcoded, so changing
+        // it in Admin Settings actually reflects here without a
+        // code change.
+        const luggageResult = await pool.query("SELECT value FROM site_settings WHERE key = 'max_luggage_kg'");
+        const maxLuggageKg = luggageResult.rows[0]?.value || "10";
+
         const emailResult = await sendPassengerReceiptEmail(passengerEmail, {
             passengerName,
             reference,
             route: routeText,
             price: priceText,
             seatNumbers,
-            pickupTerminal: terminalNameResult.rows[0]?.name || "your pickup terminal"
+            pickupTerminal: terminalNameResult.rows[0]?.name || "your pickup terminal",
+            maxLuggageKg
         });
 
         const smsResult = await sendBookingReceiptSMS(passengerPhone, {
