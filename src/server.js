@@ -55,6 +55,7 @@ const driversRouter = require("./routes/drivers");
 const promoCodesRouter = require("./routes/promo-codes");
 const waitlistRouter = require("./routes/waitlist");
 const chatRouter = require("./routes/chat");
+const settingsRouter = require("./routes/settings");
 
 const app = express();
 
@@ -118,6 +119,7 @@ app.use("/api/drivers", driversRouter);
 app.use("/api/promo-codes", promoCodesRouter);
 app.use("/api/waitlist", waitlistRouter);
 app.use("/api/chat", chatRouter);
+app.use("/api/settings", settingsRouter);
 
 const PORT = process.env.PORT || 4000;
 
