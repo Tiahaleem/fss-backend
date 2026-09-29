@@ -163,6 +163,7 @@ CREATE TABLE site_settings (
 );
 
 INSERT INTO site_settings (key, value) VALUES ('max_luggage_kg', '10');
+INSERT INTO site_settings (key, value) VALUES ('cancellation_refund_window_hours', '24');
 
 
 CREATE TABLE promo_codes (
