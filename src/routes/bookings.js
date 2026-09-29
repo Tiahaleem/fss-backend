@@ -160,6 +160,9 @@ router.get("/:reference/ticket", async (req, res) => {
 
         const row = result.rows[0];
 
+        const luggageResult = await pool.query("SELECT value FROM site_settings WHERE key = 'max_luggage_kg'");
+        const maxLuggageKg = luggageResult.rows[0]?.value || "10";
+
         res.json({
             reference: row.reference,
             status: row.status,
@@ -175,7 +178,8 @@ router.get("/:reference/ticket", async (req, res) => {
             seatNumbers: row.seat_numbers,
             terminalName: row.terminal_name,
             terminalAddress: row.terminal_address,
-            price: `₦${(Number(row.price_kobo) / 100).toLocaleString()}`
+            price: `₦${(Number(row.price_kobo) / 100).toLocaleString()}`,
+            maxLuggageKg
         });
     } catch (err) {
         console.error("GET /api/bookings/:reference/ticket failed:", err);
