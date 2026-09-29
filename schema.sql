@@ -156,6 +156,15 @@ CREATE TABLE drivers (
 );
 
 
+CREATE TABLE site_settings (
+    key             VARCHAR(50) PRIMARY KEY,
+    value           TEXT        NOT NULL,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO site_settings (key, value) VALUES ('max_luggage_kg', '10');
+
+
 CREATE TABLE promo_codes (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     code            VARCHAR(30)  NOT NULL UNIQUE, -- always stored/matched in uppercase, e.g. "WELCOME10"
