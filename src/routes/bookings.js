@@ -295,6 +295,30 @@ router.post("/:reference/cancel", requireAuth, async (req, res) => {
             return res.status(400).json({ error: `This booking is already ${booking.status}.` });
         }
 
+        // Whether this cancellation qualifies for an automatic
+        // refund — only passenger trips have a real departure time
+        // to measure against; parcels keep the existing
+        // admin-reviewed refund flow unchanged.
+        let autoRefundEligible = false;
+
+        if (booking.type === "passenger") {
+            const windowResult = await client.query("SELECT value FROM site_settings WHERE key = 'cancellation_refund_window_hours'");
+            const refundWindowHours = Number(windowResult.rows[0]?.value || 24);
+
+            const hoursResult = await client.query(
+                `SELECT EXTRACT(EPOCH FROM (
+                    (pb.travel_date + t.departure_time) AT TIME ZONE 'Africa/Lagos' - now()
+                )) / 3600 AS hours_until_departure
+                 FROM passenger_bookings pb
+                 JOIN trips t ON t.id = pb.trip_id
+                 WHERE pb.booking_id = $1`,
+                [booking.id]
+            );
+
+            const hoursUntilDeparture = Number(hoursResult.rows[0]?.hours_until_departure);
+            autoRefundEligible = hoursUntilDeparture >= refundWindowHours;
+        }
+
         await client.query("BEGIN");
 
         // For a passenger booking, actually free the seats back up —
@@ -341,6 +365,22 @@ router.post("/:reference/cancel", requireAuth, async (req, res) => {
 
         await client.query("COMMIT");
 
+        // The refund itself is a real, external payment API call —
+        // it happens AFTER commit, never inside the transaction. If
+        // it fails here, the cancellation itself still stands (seat
+        // already released); the booking just stays "confirmed" on
+        // the payment side until admin can manually complete it.
+        let refundedAutomatically = false;
+
+        if (autoRefundEligible) {
+            try {
+                await processRefund(booking);
+                refundedAutomatically = true;
+            } catch (refundErr) {
+                console.error("Automatic refund on cancellation failed:", refundErr.message);
+            }
+        }
+
         // Send the notification AFTER commit — a failed email should
         // never undo a cancellation that already genuinely happened.
         try {
@@ -370,8 +410,14 @@ router.post("/:reference/cancel", requireAuth, async (req, res) => {
                 description = `${details.rows[0].from_city} → ${details.rows[0].to_city} parcel`;
             }
 
-            await sendCancellationEmail(contactEmail, { name: contactName, reference: booking.reference, description });
-            await sendCancellationSMS(contactPhone, { reference: booking.reference });
+            // processRefund already sends its own refund-specific
+            // email/SMS when it succeeds — sending the plain
+            // cancellation notice too would be a confusing double
+            // message, so it's skipped in that case.
+            if (!refundedAutomatically) {
+                await sendCancellationEmail(contactEmail, { name: contactName, reference: booking.reference, description });
+                await sendCancellationSMS(contactPhone, { reference: booking.reference });
+            }
 
             if (booking.type === "passenger" && releasedTripId) {
                 await notifyWaitlist(releasedTripId, releasedTravelDate, seatsReleased);
@@ -380,7 +426,12 @@ router.post("/:reference/cancel", requireAuth, async (req, res) => {
             console.error("Cancellation email failed:", emailErr.message);
         }
 
-        res.json({ reference: booking.reference, status: "cancelled" });
+        res.json({
+            reference: booking.reference,
+            status: "cancelled",
+            refunded: refundedAutomatically,
+            refundPending: booking.type === "passenger" && !refundedAutomatically
+        });
     } catch (err) {
         await client.query("ROLLBACK");
         console.error("POST /api/bookings/:reference/cancel failed:", err.message);
@@ -393,6 +444,80 @@ router.post("/:reference/cancel", requireAuth, async (req, res) => {
 // =========================
 // POST /api/bookings/:reference/refund — ADMIN ONLY
 // =========================
+// The actual real refund work — issuing it through the right payment
+// provider, updating the booking, and notifying the customer. Shared
+// by the admin-triggered endpoint below and the new automatic path
+// on cancellation, so there's exactly one place that knows how to
+// really process a refund rather than two copies that could drift.
+async function processRefund(booking) {
+    if (booking.status === "refunded") {
+        const err = new Error("This booking has already been refunded.");
+        err.status = 400;
+        throw err;
+    }
+
+    if (!booking.payment_reference) {
+        const err = new Error("No payment reference on file for this booking — it can't be refunded automatically.");
+        err.status = 400;
+        throw err;
+    }
+
+    // FLW- prefix means this was a Flutterwave payment (see
+    // generateTxRef in flutterwave.js) — everything else is assumed
+    // to be a real Paystack reference. Each provider needs its own
+    // refund call, in its own shape.
+    if (booking.payment_reference.startsWith("FLW-")) {
+        // Flutterwave's refund endpoint needs its own internal
+        // numeric transaction id, not our tx_ref — verify first to
+        // look that up.
+        const verifyResult = await flutterwaveRequest(`/transactions/verify_by_reference?tx_ref=${encodeURIComponent(booking.payment_reference)}`);
+        await flutterwaveRequest(`/transactions/${verifyResult.data.id}/refund`, {
+            method: "POST",
+            body: JSON.stringify({})
+        });
+    } else {
+        // The actual real refund call — Paystack reverses the charge
+        // on the customer's card/account.
+        await paystackRequest("/refund", {
+            method: "POST",
+            body: JSON.stringify({ transaction: booking.payment_reference })
+        });
+    }
+
+    await pool.query("UPDATE bookings SET status = 'refunded' WHERE id = $1", [booking.id]);
+
+    try {
+        let contactEmail, contactName, contactPhone;
+
+        if (booking.type === "passenger") {
+            const details = await pool.query("SELECT passenger_name, passenger_email, passenger_phone FROM passenger_bookings WHERE booking_id = $1", [booking.id]);
+            contactEmail = details.rows[0].passenger_email;
+            contactName = details.rows[0].passenger_name;
+            contactPhone = details.rows[0].passenger_phone;
+        } else {
+            const details = await pool.query("SELECT sender_name, sender_email, sender_phone FROM parcel_bookings WHERE booking_id = $1", [booking.id]);
+            contactEmail = details.rows[0].sender_email;
+            contactName = details.rows[0].sender_name;
+            contactPhone = details.rows[0].sender_phone;
+        }
+
+        const amountText = `₦${(Number(booking.price_kobo) / 100).toLocaleString()}`;
+
+        await sendRefundEmail(contactEmail, {
+            name: contactName,
+            reference: booking.reference,
+            amount: amountText
+        });
+
+        await sendRefundSMS(contactPhone, {
+            reference: booking.reference,
+            amount: amountText
+        });
+    } catch (emailErr) {
+        console.error("Refund email failed:", emailErr.message);
+    }
+}
+
 // Issues a REAL refund through Paystack, against the actual payment
 // that was made. Needs payment_reference to exist — a booking with
 // no stored payment reference (e.g. very old test data) can't be
@@ -408,72 +533,9 @@ router.post("/:reference/refund", requireAdmin, async (req, res) => {
             return res.status(404).json({ error: "Booking not found." });
         }
 
-        const booking = bookingResult.rows[0];
+        await processRefund(bookingResult.rows[0]);
 
-        if (booking.status === "refunded") {
-            return res.status(400).json({ error: "This booking has already been refunded." });
-        }
-
-        if (!booking.payment_reference) {
-            return res.status(400).json({ error: "No payment reference on file for this booking — it can't be refunded automatically." });
-        }
-
-        // FLW- prefix means this was a Flutterwave payment (see
-        // generateTxRef in flutterwave.js) — everything else is
-        // assumed to be a real Paystack reference. Each provider
-        // needs its own refund call, in its own shape.
-        if (booking.payment_reference.startsWith("FLW-")) {
-            // Flutterwave's refund endpoint needs its own internal
-            // numeric transaction id, not our tx_ref — verify first
-            // to look that up.
-            const verifyResult = await flutterwaveRequest(`/transactions/verify_by_reference?tx_ref=${encodeURIComponent(booking.payment_reference)}`);
-            await flutterwaveRequest(`/transactions/${verifyResult.data.id}/refund`, {
-                method: "POST",
-                body: JSON.stringify({})
-            });
-        } else {
-            // The actual real refund call — Paystack reverses the
-            // charge on the customer's card/account.
-            await paystackRequest("/refund", {
-                method: "POST",
-                body: JSON.stringify({ transaction: booking.payment_reference })
-            });
-        }
-
-        await pool.query("UPDATE bookings SET status = 'refunded' WHERE id = $1", [booking.id]);
-
-        try {
-            let contactEmail, contactName, contactPhone;
-
-            if (booking.type === "passenger") {
-                const details = await pool.query("SELECT passenger_name, passenger_email, passenger_phone FROM passenger_bookings WHERE booking_id = $1", [booking.id]);
-                contactEmail = details.rows[0].passenger_email;
-                contactName = details.rows[0].passenger_name;
-                contactPhone = details.rows[0].passenger_phone;
-            } else {
-                const details = await pool.query("SELECT sender_name, sender_email, sender_phone FROM parcel_bookings WHERE booking_id = $1", [booking.id]);
-                contactEmail = details.rows[0].sender_email;
-                contactName = details.rows[0].sender_name;
-                contactPhone = details.rows[0].sender_phone;
-            }
-
-            const amountText = `₦${(Number(booking.price_kobo) / 100).toLocaleString()}`;
-
-            await sendRefundEmail(contactEmail, {
-                name: contactName,
-                reference: booking.reference,
-                amount: amountText
-            });
-
-            await sendRefundSMS(contactPhone, {
-                reference: booking.reference,
-                amount: amountText
-            });
-        } catch (emailErr) {
-            console.error("Refund email failed:", emailErr.message);
-        }
-
-        res.json({ reference: booking.reference, status: "refunded" });
+        res.json({ reference: bookingResult.rows[0].reference, status: "refunded" });
     } catch (err) {
         console.error("POST /api/bookings/:reference/refund failed:", err.message);
         res.status(err.status || 500).json({ error: err.message || "Couldn't process that refund." });
