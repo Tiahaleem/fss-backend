@@ -99,7 +99,7 @@ async function sendPasswordResetEmail(to, code) {
     return send(to, "Reset your password — FSS Transport", html);
 }
 
-async function sendPassengerReceiptEmail(to, { passengerName, reference, route, price, seatNumbers, pickupTerminal }) {
+async function sendPassengerReceiptEmail(to, { passengerName, reference, route, price, seatNumbers, pickupTerminal, maxLuggageKg }) {
     const html = wrapper(`
 <tr><td style="padding:32px 32px 0;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td style="background-color:#f0fdf4; border-radius:12px; padding:20px 24px;">
@@ -117,6 +117,11 @@ async function sendPassengerReceiptEmail(to, { passengerName, reference, route, 
 <tr><td style="padding:16px 20px; border-bottom:1px solid #e7edf3; color:#64748b; font-size:13px;">Pickup</td><td style="padding:16px 20px; border-bottom:1px solid #e7edf3; color:#0f172a; font-size:13px; font-weight:bold; text-align:right;">${pickupTerminal}</td></tr>
 <tr><td style="padding:16px 20px; color:#64748b; font-size:13px;">Seat${seatNumbers.length > 1 ? 's' : ''}</td><td style="padding:16px 20px; color:#0f172a; font-size:13px; font-weight:bold; text-align:right;">${seatNumbers.join(', ')}</td></tr>
 </table>
+</td></tr>
+<tr><td style="padding:20px 32px 0;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td style="background-color:#fffbeb; border-radius:10px; padding:14px 18px;">
+<p style="margin:0; color:#92400e; font-size:13px;"><strong>Luggage allowance:</strong> up to ${maxLuggageKg}kg per passenger.</p>
+</td></tr></table>
 </td></tr>
 <tr><td style="padding:28px 32px;" align="center">
 <table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="background-color:#08b6d6; border-radius:50px;">
