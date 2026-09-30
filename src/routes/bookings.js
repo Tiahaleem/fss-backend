@@ -295,30 +295,6 @@ router.post("/:reference/cancel", requireAuth, async (req, res) => {
             return res.status(400).json({ error: `This booking is already ${booking.status}.` });
         }
 
-        // Whether this cancellation qualifies for an automatic
-        // refund — only passenger trips have a real departure time
-        // to measure against; parcels keep the existing
-        // admin-reviewed refund flow unchanged.
-        let autoRefundEligible = false;
-
-        if (booking.type === "passenger") {
-            const windowResult = await client.query("SELECT value FROM site_settings WHERE key = 'cancellation_refund_window_hours'");
-            const refundWindowHours = Number(windowResult.rows[0]?.value || 24);
-
-            const hoursResult = await client.query(
-                `SELECT EXTRACT(EPOCH FROM (
-                    (pb.travel_date + t.departure_time) AT TIME ZONE 'Africa/Lagos' - now()
-                )) / 3600 AS hours_until_departure
-                 FROM passenger_bookings pb
-                 JOIN trips t ON t.id = pb.trip_id
-                 WHERE pb.booking_id = $1`,
-                [booking.id]
-            );
-
-            const hoursUntilDeparture = Number(hoursResult.rows[0]?.hours_until_departure);
-            autoRefundEligible = hoursUntilDeparture >= refundWindowHours;
-        }
-
         await client.query("BEGIN");
 
         // For a passenger booking, actually free the seats back up —
@@ -365,21 +341,10 @@ router.post("/:reference/cancel", requireAuth, async (req, res) => {
 
         await client.query("COMMIT");
 
-        // The refund itself is a real, external payment API call —
-        // it happens AFTER commit, never inside the transaction. If
-        // it fails here, the cancellation itself still stands (seat
-        // already released); the booking just stays "confirmed" on
-        // the payment side until admin can manually complete it.
-        let refundedAutomatically = false;
-
-        if (autoRefundEligible) {
-            try {
-                await processRefund(booking);
-                refundedAutomatically = true;
-            } catch (refundErr) {
-                console.error("Automatic refund on cancellation failed:", refundErr.message);
-            }
-        }
+        // Cancellation never triggers a refund on its own — that's a
+        // deliberate policy choice. A refund only ever happens when
+        // admin decides to issue one manually, via the separate
+        // refund endpoint below.
 
         // Send the notification AFTER commit — a failed email should
         // never undo a cancellation that already genuinely happened.
@@ -410,14 +375,8 @@ router.post("/:reference/cancel", requireAuth, async (req, res) => {
                 description = `${details.rows[0].from_city} → ${details.rows[0].to_city} parcel`;
             }
 
-            // processRefund already sends its own refund-specific
-            // email/SMS when it succeeds — sending the plain
-            // cancellation notice too would be a confusing double
-            // message, so it's skipped in that case.
-            if (!refundedAutomatically) {
-                await sendCancellationEmail(contactEmail, { name: contactName, reference: booking.reference, description });
-                await sendCancellationSMS(contactPhone, { reference: booking.reference });
-            }
+            await sendCancellationEmail(contactEmail, { name: contactName, reference: booking.reference, description });
+            await sendCancellationSMS(contactPhone, { reference: booking.reference });
 
             if (booking.type === "passenger" && releasedTripId) {
                 await notifyWaitlist(releasedTripId, releasedTravelDate, seatsReleased);
@@ -428,9 +387,7 @@ router.post("/:reference/cancel", requireAuth, async (req, res) => {
 
         res.json({
             reference: booking.reference,
-            status: "cancelled",
-            refunded: refundedAutomatically,
-            refundPending: booking.type === "passenger" && !refundedAutomatically
+            status: "cancelled"
         });
     } catch (err) {
         await client.query("ROLLBACK");
