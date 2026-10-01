@@ -9,12 +9,10 @@ const { loginLimiter, signupLimiter, verifyLimiter, resendLimiter } = require(".
 //   - Login returns a signed JWT the frontend stores and sends back
 //     on future requests, instead of a browser-only "session"
 //
-// One thing still missing on purpose: actually EMAILING the
-// verification code. That needs an email service (Resend, matching
-// what was already planned) — until that's wired up, this returns
-// the code directly in the signup response so the flow can still be
-// tested end-to-end. That return value gets deleted the moment email
-// sending exists — search for "REMOVE ONCE EMAIL IS WIRED UP" below.
+// Verification codes are genuinely emailed via Resend
+// (sendVerificationEmail, below). The _devCode field in the signup
+// response is only a fallback for when that email send itself fails
+// — not a sign that email was ever missing from this flow.
 
 const express = require("express");
 const router = express.Router();
@@ -34,6 +32,17 @@ function generateCode() {
     return String(Math.floor(100000 + Math.random() * 900000));
 }
 
+function generateReferralCode() {
+    // Short, readable, and avoids visually-confusable characters
+    // (0/O, 1/I/l) since people type these out by hand.
+    const chars = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+    let code = "";
+    for (let i = 0; i < 6; i++) {
+        code += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return code;
+}
+
 function signToken(user) {
     return jwt.sign(
         { id: user.id, email: user.email, role: user.role },
@@ -43,7 +52,14 @@ function signToken(user) {
 }
 
 function toClientShape(user) {
-    return { id: user.id, name: user.name, email: user.email, role: user.role };
+    return {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        referralCode: user.referral_code,
+        referralCreditKobo: user.referral_credit_kobo
+    };
 }
 
 // =========================
@@ -53,7 +69,7 @@ router.post("/signup", signupLimiter, async (req, res) => {
     const client = await pool.connect();
 
     try {
-        const { name, email, password } = req.body;
+        const { name, email, password, referralCode } = req.body;
 
         if (!name || !email || !password) {
             return res.status(400).json({ error: "Name, email, and password are all required." });
@@ -67,15 +83,38 @@ router.post("/signup", signupLimiter, async (req, res) => {
             return res.status(409).json({ error: "An account with that email already exists." });
         }
 
+        // A referral code is optional, but if one was given, it has
+        // to be real — silently ignoring a typo'd code would mean
+        // someone thinks they successfully referred a friend when
+        // they actually didn't.
+        let referredByUserId = null;
+        if (referralCode) {
+            const referrerResult = await client.query("SELECT id FROM users WHERE referral_code = $1", [referralCode.toUpperCase()]);
+            if (referrerResult.rows.length === 0) {
+                return res.status(400).json({ error: "That referral code doesn't exist." });
+            }
+            referredByUserId = referrerResult.rows[0].id;
+        }
+
         await client.query("BEGIN");
 
         const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
 
+        // Collisions are astronomically unlikely at 32^6 possible
+        // codes, but checked for anyway rather than assumed away.
+        let newReferralCode;
+        let isUnique = false;
+        while (!isUnique) {
+            newReferralCode = generateReferralCode();
+            const collisionCheck = await client.query("SELECT id FROM users WHERE referral_code = $1", [newReferralCode]);
+            isUnique = collisionCheck.rows.length === 0;
+        }
+
         const userResult = await client.query(
-            `INSERT INTO users (name, email, password_hash, role, email_verified)
-             VALUES ($1, $2, $3, 'customer', false)
+            `INSERT INTO users (name, email, password_hash, role, email_verified, referral_code, referred_by_user_id)
+             VALUES ($1, $2, $3, 'customer', false, $4, $5)
              RETURNING *`,
-            [name, email.toLowerCase(), passwordHash]
+            [name, email.toLowerCase(), passwordHash, newReferralCode, referredByUserId]
         );
 
         const code = generateCode();
@@ -245,7 +284,7 @@ router.post("/login", loginLimiter, async (req, res) => {
 // of just trusting whatever was cached locally.
 router.get("/me", requireAuth, async (req, res) => {
     try {
-        const result = await pool.query("SELECT id, name, email, role FROM users WHERE id = $1", [req.user.id]);
+        const result = await pool.query("SELECT id, name, email, role, referral_code, referral_credit_kobo FROM users WHERE id = $1", [req.user.id]);
 
         if (result.rows.length === 0) {
             return res.status(404).json({ error: "Account not found." });
