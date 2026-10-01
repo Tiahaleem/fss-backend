@@ -237,11 +237,13 @@ router.post("/flutterwave/initialize-passenger", paymentLimiter, optionalAuth, a
 
         const baseTotalKobo = tripResult.rows[0].price_kobo * seatNumbers.length;
 
-        // The discount is computed HERE, server-side, from the real
-        // base price — never trusted from anything the customer's
-        // browser might claim about the amount.
+        // Every discount here is computed server-side, in a fixed
+        // order, each only ever reducing what's left — never trusted
+        // from anything the customer's browser claims.
         let totalKobo = baseTotalKobo;
         let appliedPromoId = null;
+        let referralBonusAppliedKobo = 0;
+        let referralCreditAppliedKobo = 0;
 
         if (promoCode) {
             const promoResult = await validatePromoCode(promoCode, baseTotalKobo);
@@ -250,6 +252,35 @@ router.post("/flutterwave/initialize-passenger", paymentLimiter, optionalAuth, a
             }
             totalKobo = promoResult.finalAmountKobo;
             appliedPromoId = promoResult.promoId;
+        }
+
+        // Referral perks only ever apply to a logged-in, identified
+        // customer — a guest checkout has no account to track "has
+        // this person already used their referral bonus" against.
+        if (req.user) {
+            const userResult = await pool.query(
+                "SELECT referred_by_user_id, referral_bonus_used, referral_credit_kobo FROM users WHERE id = $1",
+                [req.user.id]
+            );
+            const user = userResult.rows[0];
+
+            if (user) {
+                // The one-time discount for being someone's referral,
+                // on their very first booking only.
+                if (user.referred_by_user_id && !user.referral_bonus_used) {
+                    const settingResult = await pool.query("SELECT value FROM site_settings WHERE key = 'referral_discount_kobo'");
+                    const referralDiscountKobo = Number(settingResult.rows[0]?.value || 0);
+                    referralBonusAppliedKobo = Math.min(referralDiscountKobo, totalKobo);
+                    totalKobo -= referralBonusAppliedKobo;
+                }
+
+                // Any earned credit from referring others, applied on
+                // top of everything else.
+                if (user.referral_credit_kobo > 0) {
+                    referralCreditAppliedKobo = Math.min(user.referral_credit_kobo, totalKobo);
+                    totalKobo -= referralCreditAppliedKobo;
+                }
+            }
         }
 
         const txRef = generateTxRef();
@@ -274,7 +305,9 @@ router.post("/flutterwave/initialize-passenger", paymentLimiter, optionalAuth, a
                     sessionId: sessionId || "",
                     passengerName, passengerEmail, passengerPhone, travelDate,
                     ownerId: req.user ? req.user.id : "", // Flutterwave's meta rejects null too
-                    appliedPromoId: appliedPromoId || ""
+                    appliedPromoId: appliedPromoId || "",
+                    referralBonusApplied: referralBonusAppliedKobo > 0 ? "true" : "",
+                    referralCreditAppliedKobo: referralCreditAppliedKobo || ""
                 }
             })
         });
@@ -423,6 +456,36 @@ router.get("/flutterwave/verify/:txRef", async (req, res) => {
         // consumes it.
         if (metadata.appliedPromoId) {
             await pool.query("UPDATE promo_codes SET times_used = times_used + 1 WHERE id = $1", [metadata.appliedPromoId]);
+        }
+
+        // Same idea for referral perks — only a genuinely completed
+        // payment actually spends the credit or marks the one-time
+        // bonus used, never an abandoned attempt.
+        if (metadata.referralCreditAppliedKobo && metadata.ownerId) {
+            await pool.query(
+                "UPDATE users SET referral_credit_kobo = referral_credit_kobo - $1 WHERE id = $2",
+                [Number(metadata.referralCreditAppliedKobo), metadata.ownerId]
+            );
+        }
+
+        if (metadata.referralBonusApplied === "true" && metadata.ownerId) {
+            const referredUserResult = await pool.query(
+                "UPDATE users SET referral_bonus_used = true WHERE id = $1 RETURNING referred_by_user_id",
+                [metadata.ownerId]
+            );
+
+            const referrerId = referredUserResult.rows[0]?.referred_by_user_id;
+            if (referrerId) {
+                const settingResult = await pool.query("SELECT value FROM site_settings WHERE key = 'referral_reward_kobo'");
+                const rewardKobo = Number(settingResult.rows[0]?.value || 0);
+
+                if (rewardKobo > 0) {
+                    await pool.query(
+                        "UPDATE users SET referral_credit_kobo = referral_credit_kobo + $1 WHERE id = $2",
+                        [rewardKobo, referrerId]
+                    );
+                }
+            }
         }
 
         res.json({ paymentVerified: true, ...bookingResult });
