@@ -40,11 +40,16 @@ CREATE TABLE users (
     role            VARCHAR(20)     NOT NULL DEFAULT 'customer'
                         CHECK (role IN ('customer', 'admin')),
     email_verified  BOOLEAN         NOT NULL DEFAULT false,
+    referral_code       VARCHAR(10) UNIQUE, -- this user's own shareable code
+    referred_by_user_id UUID REFERENCES users(id), -- who referred them, if anyone
+    referral_bonus_used BOOLEAN     NOT NULL DEFAULT false, -- whether they've already used their one-time referred-customer discount
+    referral_credit_kobo INTEGER    NOT NULL DEFAULT 0, -- real, earned credit from referring others, usable at checkout
     created_at      TIMESTAMPTZ     NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ     NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_users_referral_code ON users(referral_code);
 
 
 -- Short-lived codes for the email verification step (signup.html) and
@@ -163,6 +168,8 @@ CREATE TABLE site_settings (
 );
 
 INSERT INTO site_settings (key, value) VALUES ('max_luggage_kg', '10');
+INSERT INTO site_settings (key, value) VALUES ('referral_discount_kobo', '100000'); -- ₦1,000 off for the new, referred customer's first booking
+INSERT INTO site_settings (key, value) VALUES ('referral_reward_kobo', '100000'); -- ₦1,000 credit for whoever referred them
 
 
 CREATE TABLE promo_codes (
