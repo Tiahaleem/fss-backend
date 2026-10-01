@@ -383,115 +383,189 @@ router.post("/flutterwave/initialize-parcel", paymentLimiter, optionalAuth, asyn
     }
 });
 
+// The actual real verification + booking creation work. Shared by
+// the browser-redirect endpoint below AND the webhook — whichever
+// one reaches Flutterwave and gets back "successful" first does the
+// real work; the other one safely no-ops once it sees a booking
+// already exists for this exact payment reference. This idempotency
+// check is what makes it safe for both paths to race each other.
+async function verifyAndCreateBooking(txRef) {
+    const existingBooking = await pool.query(
+        "SELECT reference FROM bookings WHERE payment_reference = $1",
+        [txRef]
+    );
+    if (existingBooking.rows.length > 0) {
+        return { reference: existingBooking.rows[0].reference, alreadyProcessed: true };
+    }
+
+    const flwResponse = await flutterwaveRequest(`/transactions/verify_by_reference?tx_ref=${encodeURIComponent(txRef)}`);
+    const transaction = flwResponse.data;
+
+    if (transaction.status !== "successful") {
+        const err = new Error("Payment was not successful.");
+        err.status = 402;
+        err.flutterwaveStatus = transaction.status;
+        throw err;
+    }
+
+    // Same failsafe Flutterwave's own docs recommend: don't just
+    // trust "successful" — confirm the currency actually matches
+    // what was expected (this system only ever charges in Naira).
+    if (transaction.currency !== "NGN") {
+        const err = new Error("Payment currency didn't match what was expected.");
+        err.status = 402;
+        throw err;
+    }
+
+    const metadata = transaction.meta;
+
+    if (!metadata || !metadata.bookingType) {
+        const err = new Error("Payment succeeded but booking details are missing. Contact support with your payment reference.");
+        err.status = 400;
+        throw err;
+    }
+
+    // Flutterwave's own confirmed amount is the authoritative
+    // record of what was genuinely charged — this already
+    // reflects any promo discount applied at checkout, straight
+    // from the payment provider itself rather than something
+    // reconstructed on our end.
+    const confirmedAmountKobo = Math.round(Number(transaction.amount) * 100);
+
+    let bookingResult;
+
+    if (metadata.bookingType === "passenger") {
+        bookingResult = await createPassengerBooking({
+            tripId: metadata.tripId,
+            terminalId: metadata.terminalId,
+            seatNumbers: metadata.seatNumbers.split(","), // reverses the join(",") done at initialize time
+            sessionId: metadata.sessionId || null,
+            passengerName: metadata.passengerName,
+            passengerEmail: metadata.passengerEmail,
+            passengerPhone: metadata.passengerPhone,
+            travelDate: metadata.travelDate,
+            ownerId: metadata.ownerId || null,
+            paymentReference: transaction.tx_ref,
+            overridePriceKobo: confirmedAmountKobo
+        });
+    } else if (metadata.bookingType === "parcel") {
+        bookingResult = await createParcelBooking({
+            fromCity: metadata.fromCity,
+            toCity: metadata.toCity,
+            senderName: metadata.senderName,
+            senderPhone: metadata.senderPhone,
+            senderEmail: metadata.senderEmail,
+            receiverName: metadata.receiverName,
+            receiverPhone: metadata.receiverPhone,
+            description: metadata.description,
+            weightKg: metadata.weightKg,
+            declaredValueKobo: metadata.declaredValueKobo,
+            priceKobo: confirmedAmountKobo,
+            ownerId: metadata.ownerId || null,
+            paymentReference: transaction.tx_ref
+        });
+    } else {
+        const err = new Error("Unknown booking type in payment metadata.");
+        err.status = 400;
+        throw err;
+    }
+
+    // Only counts as a real use once payment has genuinely gone
+    // through — an abandoned checkout with a code typed in never
+    // consumes it.
+    if (metadata.appliedPromoId) {
+        await pool.query("UPDATE promo_codes SET times_used = times_used + 1 WHERE id = $1", [metadata.appliedPromoId]);
+    }
+
+    // Same idea for referral perks — only a genuinely completed
+    // payment actually spends the credit or marks the one-time
+    // bonus used, never an abandoned attempt.
+    if (metadata.referralCreditAppliedKobo && metadata.ownerId) {
+        await pool.query(
+            "UPDATE users SET referral_credit_kobo = referral_credit_kobo - $1 WHERE id = $2",
+            [Number(metadata.referralCreditAppliedKobo), metadata.ownerId]
+        );
+    }
+
+    if (metadata.referralBonusApplied === "true" && metadata.ownerId) {
+        const referredUserResult = await pool.query(
+            "UPDATE users SET referral_bonus_used = true WHERE id = $1 RETURNING referred_by_user_id",
+            [metadata.ownerId]
+        );
+
+        const referrerId = referredUserResult.rows[0]?.referred_by_user_id;
+        if (referrerId) {
+            const settingResult = await pool.query("SELECT value FROM site_settings WHERE key = 'referral_reward_kobo'");
+            const rewardKobo = Number(settingResult.rows[0]?.value || 0);
+
+            if (rewardKobo > 0) {
+                await pool.query(
+                    "UPDATE users SET referral_credit_kobo = referral_credit_kobo + $1 WHERE id = $2",
+                    [rewardKobo, referrerId]
+                );
+            }
+        }
+    }
+
+    return bookingResult;
+}
+
 // =========================
 // GET /api/payments/flutterwave/verify/:txRef
 // =========================
 router.get("/flutterwave/verify/:txRef", async (req, res) => {
     try {
-        const flwResponse = await flutterwaveRequest(`/transactions/verify_by_reference?tx_ref=${encodeURIComponent(req.params.txRef)}`);
-        const transaction = flwResponse.data;
-
-        if (transaction.status !== "successful") {
-            return res.status(402).json({ error: "Payment was not successful.", flutterwaveStatus: transaction.status });
-        }
-
-        // Same failsafe Flutterwave's own docs recommend: don't just
-        // trust "successful" — confirm the currency actually matches
-        // what was expected (this system only ever charges in Naira).
-        if (transaction.currency !== "NGN") {
-            return res.status(402).json({ error: "Payment currency didn't match what was expected." });
-        }
-
-        const metadata = transaction.meta;
-
-        if (!metadata || !metadata.bookingType) {
-            return res.status(400).json({ error: "Payment succeeded but booking details are missing. Contact support with your payment reference." });
-        }
-
-        // Flutterwave's own confirmed amount is the authoritative
-        // record of what was genuinely charged — this already
-        // reflects any promo discount applied at checkout, straight
-        // from the payment provider itself rather than something
-        // reconstructed on our end.
-        const confirmedAmountKobo = Math.round(Number(transaction.amount) * 100);
-
-        let bookingResult;
-
-        if (metadata.bookingType === "passenger") {
-            bookingResult = await createPassengerBooking({
-                tripId: metadata.tripId,
-                terminalId: metadata.terminalId,
-                seatNumbers: metadata.seatNumbers.split(","), // reverses the join(",") done at initialize time
-                sessionId: metadata.sessionId || null,
-                passengerName: metadata.passengerName,
-                passengerEmail: metadata.passengerEmail,
-                passengerPhone: metadata.passengerPhone,
-                travelDate: metadata.travelDate,
-                ownerId: metadata.ownerId || null,
-                paymentReference: transaction.tx_ref,
-                overridePriceKobo: confirmedAmountKobo
-            });
-        } else if (metadata.bookingType === "parcel") {
-            bookingResult = await createParcelBooking({
-                fromCity: metadata.fromCity,
-                toCity: metadata.toCity,
-                senderName: metadata.senderName,
-                senderPhone: metadata.senderPhone,
-                senderEmail: metadata.senderEmail,
-                receiverName: metadata.receiverName,
-                receiverPhone: metadata.receiverPhone,
-                description: metadata.description,
-                weightKg: metadata.weightKg,
-                declaredValueKobo: metadata.declaredValueKobo,
-                priceKobo: confirmedAmountKobo,
-                ownerId: metadata.ownerId || null,
-                paymentReference: transaction.tx_ref
-            });
-        } else {
-            return res.status(400).json({ error: "Unknown booking type in payment metadata." });
-        }
-
-        // Only counts as a real use once payment has genuinely gone
-        // through — an abandoned checkout with a code typed in never
-        // consumes it.
-        if (metadata.appliedPromoId) {
-            await pool.query("UPDATE promo_codes SET times_used = times_used + 1 WHERE id = $1", [metadata.appliedPromoId]);
-        }
-
-        // Same idea for referral perks — only a genuinely completed
-        // payment actually spends the credit or marks the one-time
-        // bonus used, never an abandoned attempt.
-        if (metadata.referralCreditAppliedKobo && metadata.ownerId) {
-            await pool.query(
-                "UPDATE users SET referral_credit_kobo = referral_credit_kobo - $1 WHERE id = $2",
-                [Number(metadata.referralCreditAppliedKobo), metadata.ownerId]
-            );
-        }
-
-        if (metadata.referralBonusApplied === "true" && metadata.ownerId) {
-            const referredUserResult = await pool.query(
-                "UPDATE users SET referral_bonus_used = true WHERE id = $1 RETURNING referred_by_user_id",
-                [metadata.ownerId]
-            );
-
-            const referrerId = referredUserResult.rows[0]?.referred_by_user_id;
-            if (referrerId) {
-                const settingResult = await pool.query("SELECT value FROM site_settings WHERE key = 'referral_reward_kobo'");
-                const rewardKobo = Number(settingResult.rows[0]?.value || 0);
-
-                if (rewardKobo > 0) {
-                    await pool.query(
-                        "UPDATE users SET referral_credit_kobo = referral_credit_kobo + $1 WHERE id = $2",
-                        [rewardKobo, referrerId]
-                    );
-                }
-            }
-        }
-
+        const bookingResult = await verifyAndCreateBooking(req.params.txRef);
         res.json({ paymentVerified: true, ...bookingResult });
     } catch (err) {
         console.error("GET /api/payments/flutterwave/verify failed:", err.message);
-        res.status(err.status || 500).json({ error: err.message || "Couldn't verify that payment." });
+        res.status(err.status || 500).json({ error: err.message || "Couldn't verify that payment.", flutterwaveStatus: err.flutterwaveStatus });
+    }
+});
+
+// =========================
+// POST /api/payments/flutterwave/webhook
+// =========================
+// An independent, server-to-server notification straight from
+// Flutterwave the moment a payment succeeds — separate from whether
+// the customer's browser ever makes it back to the redirect page.
+// Without this, a customer who pays but then loses their connection,
+// closes their browser too early, or has the redirect itself fail
+// for any reason could have genuinely paid with no booking ever
+// created. This exists purely as a safety net alongside the redirect
+// flow above — whichever one gets there first does the real work.
+router.post("/flutterwave/webhook", async (req, res) => {
+    try {
+        // Flutterwave sends back the exact secret string configured
+        // in the dashboard, verbatim, in this header — a simple
+        // shared-secret check, not a computed signature. Without
+        // this, anyone could POST a fake payload claiming a payment
+        // succeeded.
+        const signature = req.headers["verif-hash"];
+        if (!signature || !process.env.FLW_WEBHOOK_SECRET_HASH || signature !== process.env.FLW_WEBHOOK_SECRET_HASH) {
+            return res.status(401).json({ error: "Invalid webhook signature." });
+        }
+
+        const txRef = req.body?.data?.tx_ref;
+        if (!txRef) {
+            return res.status(400).json({ error: "No tx_ref in webhook payload." });
+        }
+
+        // The webhook body itself is NEVER trusted for the actual
+        // transaction details — verifyAndCreateBooking independently
+        // re-fetches the real, current state straight from
+        // Flutterwave's own servers using just this reference.
+        await verifyAndCreateBooking(txRef);
+
+        res.status(200).json({ received: true });
+    } catch (err) {
+        // Logged (and therefore alerted on, via the existing error
+        // alert system) rather than thrown — Flutterwave expects a
+        // fast 200 acknowledging receipt regardless, and retries
+        // aggressively on anything else, which would just repeat
+        // whatever genuinely failed.
+        console.error("POST /api/payments/flutterwave/webhook failed:", err.message);
+        res.status(200).json({ received: true, processingError: err.message });
     }
 });
 
