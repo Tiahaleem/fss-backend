@@ -136,7 +136,11 @@ async function createPassengerBooking({
             price: priceText
         });
 
-        return { reference, bookingId, priceKobo: totalPriceKobo, seatCount: seatNumbers.length, emailResult, smsResult };
+        return {
+            reference, bookingId, priceKobo: totalPriceKobo, seatCount: seatNumbers.length, emailResult, smsResult,
+            fromCity: tripResult.rows[0].from_city,
+            toCity: tripResult.rows[0].to_city
+        };
     } catch (err) {
         try { await client.query("ROLLBACK"); } catch (_) {}
         throw err;
