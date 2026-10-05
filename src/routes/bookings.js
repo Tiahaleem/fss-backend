@@ -244,7 +244,8 @@ router.get("/", requireAdmin, async (req, res) => {
                 pab.sender_name, pab.sender_phone, pab.receiver_name, pab.receiver_phone,
                 COALESCE(pab.from_city, r.from_city) AS from_city,
                 COALESCE(pab.to_city, r.to_city) AS to_city,
-                t.departure_time
+                t.departure_time,
+                to_char(pb.travel_date, 'YYYY-MM-DD') AS travel_date
              FROM bookings b
              LEFT JOIN passenger_bookings pb ON pb.booking_id = b.id
              LEFT JOIN parcel_bookings pab ON pab.booking_id = b.id
