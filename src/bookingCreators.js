@@ -10,6 +10,7 @@
 
 const pool = require("./db");
 const { sendPassengerReceiptEmail, sendParcelReceiptEmail } = require("./email");
+const { appendBookingRow } = require("./sheets");
 const { sendBookingReceiptSMS } = require("./sms");
 
 function generateReference(prefix) {
@@ -109,6 +110,11 @@ async function createPassengerBooking({
 
         await client.query("COMMIT");
 
+        // Mirror the new booking into the Google Sheet. Deliberately not
+        // awaited, and appendBookingRow never throws — the sheet must
+        // never be able to slow down or break a real booking.
+        appendBookingRow(reference);
+
         const terminalNameResult = await pool.query("SELECT name FROM terminals WHERE id = $1", [terminalId]);
 
         const routeText = `${tripResult.rows[0].from_city} → ${tripResult.rows[0].to_city}`;
@@ -188,6 +194,11 @@ async function createParcelBooking({
         );
 
         await client.query("COMMIT");
+
+        // Mirror the new booking into the Google Sheet. Deliberately not
+        // awaited, and appendBookingRow never throws — the sheet must
+        // never be able to slow down or break a real booking.
+        appendBookingRow(reference);
 
         const parcelRouteText = `${fromCity} → ${toCity}`;
         const parcelPriceText = `₦${((priceKobo || 0) / 100).toLocaleString()}`;
