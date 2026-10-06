@@ -17,6 +17,7 @@ const { flutterwaveRequest } = require("../flutterwave");
 const { sendCancellationEmail, sendRefundEmail } = require("../email");
 const { sendCancellationSMS, sendRefundSMS } = require("../sms");
 const { notifyWaitlist } = require("./waitlist");
+const { updateBookingStatus } = require("../sheets");
 
 // =========================
 // POST /api/bookings/passenger — ADMIN ONLY now
@@ -342,6 +343,10 @@ router.post("/:reference/cancel", requireAuth, async (req, res) => {
 
         await client.query("COMMIT");
 
+        // Reflect the cancellation in the Google Sheet (never throws,
+        // deliberately not awaited).
+        updateBookingStatus(booking.reference);
+
         // Cancellation never triggers a refund on its own — that's a
         // deliberate policy choice. A refund only ever happens when
         // admin decides to issue one manually, via the separate
@@ -443,6 +448,9 @@ async function processRefund(booking) {
     }
 
     await pool.query("UPDATE bookings SET status = 'refunded' WHERE id = $1", [booking.id]);
+
+    // Reflect the refund in the Google Sheet (never throws, not awaited).
+    updateBookingStatus(booking.reference);
 
     try {
         let contactEmail, contactName, contactPhone;
