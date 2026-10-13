@@ -55,7 +55,7 @@ async function sendSMS(to, message) {
 }
 
 async function sendBookingReceiptSMS(to, { reference, route, price }) {
-    return sendSMS(to, `FSS Transport: Payment received! ${route} - ${price}. Ref: ${reference}. Track: fss.ng/track`);
+    return sendSMS(to, `FSS Transport: Payment received! ${route} - ${price}. Ref: ${reference}. Track: fsstransport.com.ng/track.html?ref=${reference}`);
 }
 
 async function sendDepartedSMS(to, { reference, route }) {
@@ -63,11 +63,11 @@ async function sendDepartedSMS(to, { reference, route }) {
 }
 
 async function sendDepartureReminderSMS(to, { route, departureTime, pickupTerminal }) {
-    return sendSMS(to, `FSS Transport: Reminder - your ${route} trip departs at ${departureTime} today from ${pickupTerminal}. Arrive 15-20 mins early.`);
+    return sendSMS(to, `FSS Transport: Reminder - your ${route} trip departs at ${departureTime} today from ${pickupTerminal}. Arrive 20 mins early with a valid ID.`);
 }
 
 async function sendAdvanceReminderSMS(to, { route, travelDate, departureTime, pickupTerminal }) {
-    return sendSMS(to, `FSS Transport: Your ${route} trip is coming up in 3 days, on ${travelDate} at ${departureTime}, from ${pickupTerminal}.`);
+    return sendSMS(to, `FSS Transport: Your ${route} trip is coming up in 3 days, on ${travelDate} at ${departureTime}, from ${pickupTerminal}. Please arrive 20 mins early.`);
 }
 
 async function sendCancellationSMS(to, { reference }) {
