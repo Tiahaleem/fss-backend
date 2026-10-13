@@ -129,7 +129,7 @@ async function sendPassengerReceiptEmail(to, { passengerName, reference, route, 
 </td></tr></table>
 </td></tr>
 <tr><td style="padding:0 32px 32px;">
-<p style="margin:0; color:#64748b; font-size:13px; line-height:1.6; text-align:center;">Reference: <strong>${reference}</strong> — please arrive 30 minutes before departure with a valid photo ID.</p>
+<p style="margin:0; color:#64748b; font-size:13px; line-height:1.6; text-align:center;">Reference: <strong>${reference}</strong> — please arrive 20 minutes before departure with a valid photo ID.</p>
 </td></tr>
     `);
 
@@ -233,6 +233,7 @@ async function sendAdvanceReminderEmail(to, { passengerName, reference, route, t
 <tr><td style="padding:16px 20px;"><p style="margin:0; color:#64748b; font-size:13px;">Reference</p><p style="margin:2px 0 0; color:#0f172a; font-size:15px; font-weight:bold;">${reference}</p></td></tr>
 </table>
 </td></tr>
+<tr><td style="padding:16px 32px 0;"><p style="margin:0; color:#64748b; font-size:13px; line-height:1.7;">On the day, please arrive at your pickup center 20 minutes early, and bring a valid ID.</p></td></tr>
 <tr><td style="padding:28px 32px;" align="center">
 <table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="background-color:#08b6d6; border-radius:50px;">
 <a href="${SITE_URL}/track.html?ref=${encodeURIComponent(reference)}" style="display:inline-block; padding:14px 32px; color:#ffffff; font-size:14px; font-weight:bold; text-decoration:none;">View Your Booking</a>
@@ -263,7 +264,7 @@ async function sendDepartureReminderEmail(to, { passengerName, reference, route,
 </table>
 </td></tr>
 <tr><td style="padding:20px 32px 0;">
-<p style="margin:0; color:#64748b; font-size:13px; line-height:1.7;">Arrive at your pickup center 15–20 minutes early, and bring a valid ID.</p>
+<p style="margin:0; color:#64748b; font-size:13px; line-height:1.7;">Please arrive at your pickup center 20 minutes early, and bring a valid ID.</p>
 </td></tr>
 <tr><td style="padding:28px 32px;" align="center">
 <table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="background-color:#08b6d6; border-radius:50px;">
