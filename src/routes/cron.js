@@ -20,12 +20,31 @@ const { sendDepartureReminderSMS, sendAdvanceReminderSMS } = require("../sms");
 const CRON_SECRET = process.env.CRON_SECRET;
 
 // GET /api/cron/send-departure-reminders?key=...
-router.get("/send-departure-reminders", async (req, res) => {
+router.get("/send-departure-reminders", (req, res) => {
     if (!CRON_SECRET || req.query.key !== CRON_SECRET) {
         return res.status(401).json({ error: "Invalid or missing key." });
     }
 
-    try {
+    // Answer cron-job.org straight away. Sending emails and SMS can take
+    // longer than its 30-second limit, and a "timed out" result counts as
+    // a failure — after enough failures cron-job.org switches the job off.
+    // The real work carries on in the background.
+    if (reminderRunInProgress) {
+        return res.json({ status: "already running" });
+    }
+    reminderRunInProgress = true;
+    res.json({ status: "started" });
+
+    runReminders()
+        .catch((err) => console.error("Reminder run failed:", err.message))
+        .finally(() => { reminderRunInProgress = false; });
+});
+
+// Stops two overlapping runs from sending the same reminder twice
+let reminderRunInProgress = false;
+
+async function runReminders() {
+    {
         // Every passenger booking whose trip departs (today's date +
         // that trip's time, both understood as West Africa Time —
         // this business operates in Nigeria, regardless of what
@@ -130,14 +149,11 @@ router.get("/send-departure-reminders", async (req, res) => {
             if (advanceEmailResult.success) advanceSentCount++;
         }
 
-        res.json({
+        console.log("Reminder run done:", {
             checked: result.rows.length, sent: sentCount,
             advanceChecked: advanceResult.rows.length, advanceSent: advanceSentCount
         });
-    } catch (err) {
-        console.error("GET /api/cron/send-departure-reminders failed:", err.message);
-        res.status(500).json({ error: "Couldn't run the reminder check." });
     }
-});
+}
 
 module.exports = router;
