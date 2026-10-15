@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 // =========================
 // BOOKING CREATORS (shared)
 // =========================
@@ -17,7 +18,7 @@ function generateReference(prefix) {
     const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     let code = prefix + "-";
     for (let i = 0; i < 6; i++) {
-        code += chars.charAt(Math.floor(Math.random() * chars.length));
+        code += chars.charAt(crypto.randomInt(chars.length));
     }
     return code;
 }
