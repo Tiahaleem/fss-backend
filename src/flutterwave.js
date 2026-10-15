@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 // =========================
 // FLUTTERWAVE REQUEST HELPER (shared)
 // =========================
@@ -31,7 +32,7 @@ async function flutterwaveRequest(path, options = {}) {
 // Flutterwave doesn't generate a reference for us the way Paystack
 // does — we have to make one up ourselves, before ever calling them.
 function generateTxRef() {
-    return `FLW-${Date.now()}-${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
+    return `FLW-${Date.now()}-${crypto.randomBytes(5).toString("hex").toUpperCase()}`;
 }
 
 module.exports = { flutterwaveRequest, generateTxRef };
