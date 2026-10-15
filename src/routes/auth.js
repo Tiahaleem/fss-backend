@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const { loginLimiter, signupLimiter, verifyLimiter, resendLimiter } = require("../rateLimiters");
 // =========================
 // AUTH API
@@ -29,7 +30,7 @@ const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 function generateCode() {
-    return String(Math.floor(100000 + Math.random() * 900000));
+    return String(crypto.randomInt(100000, 1000000));
 }
 
 function generateReferralCode() {
@@ -38,7 +39,7 @@ function generateReferralCode() {
     const chars = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
     let code = "";
     for (let i = 0; i < 6; i++) {
-        code += chars[Math.floor(Math.random() * chars.length)];
+        code += chars[crypto.randomInt(chars.length)];
     }
     return code;
 }
