@@ -12,6 +12,7 @@ const crypto = require("crypto");
 const pool = require("./db");
 const { sendPassengerReceiptEmail, sendParcelReceiptEmail } = require("./email");
 const { appendBookingRow } = require("./sheets");
+const { notifyAdminBooking } = require("./adminAlerts");
 const { sendBookingReceiptSMS } = require("./sms");
 
 function generateReference(prefix) {
@@ -116,6 +117,10 @@ async function createPassengerBooking({
         // never be able to slow down or break a real booking.
         appendBookingRow(reference);
 
+        // Tell the company about the new booking by email (never throws,
+        // deliberately not awaited).
+        notifyAdminBooking(reference, "new");
+
         const terminalNameResult = await pool.query("SELECT name FROM terminals WHERE id = $1", [terminalId]);
 
         const routeText = `${tripResult.rows[0].from_city} → ${tripResult.rows[0].to_city}`;
@@ -200,6 +205,10 @@ async function createParcelBooking({
         // awaited, and appendBookingRow never throws — the sheet must
         // never be able to slow down or break a real booking.
         appendBookingRow(reference);
+
+        // Tell the company about the new booking by email (never throws,
+        // deliberately not awaited).
+        notifyAdminBooking(reference, "new");
 
         const parcelRouteText = `${fromCity} → ${toCity}`;
         const parcelPriceText = `₦${((priceKobo || 0) / 100).toLocaleString()}`;
