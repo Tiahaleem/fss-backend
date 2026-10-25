@@ -18,6 +18,7 @@ const { sendCancellationEmail, sendRefundEmail } = require("../email");
 const { sendCancellationSMS, sendRefundSMS } = require("../sms");
 const { notifyWaitlist } = require("./waitlist");
 const { updateBookingStatus } = require("../sheets");
+const { notifyAdminBooking } = require("../adminAlerts");
 
 // =========================
 // POST /api/bookings/passenger — ADMIN ONLY now
@@ -346,6 +347,7 @@ router.post("/:reference/cancel", requireAuth, async (req, res) => {
         // Reflect the cancellation in the Google Sheet (never throws,
         // deliberately not awaited).
         updateBookingStatus(booking.reference);
+        notifyAdminBooking(booking.reference, "cancelled");
 
         // Cancellation never triggers a refund on its own — that's a
         // deliberate policy choice. A refund only ever happens when
@@ -451,6 +453,7 @@ async function processRefund(booking) {
 
     // Reflect the refund in the Google Sheet (never throws, not awaited).
     updateBookingStatus(booking.reference);
+    notifyAdminBooking(booking.reference, "refunded");
 
     try {
         let contactEmail, contactName, contactPhone;
