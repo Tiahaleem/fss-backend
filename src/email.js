@@ -364,6 +364,97 @@ async function sendNewChatAlertEmail(to, { customerName, message, conversationId
     return send(to, `💬 New chat from ${customerName}`, html);
 }
 
+
+// Escapes text that came from a customer before it goes into HTML,
+// so a name or note can never inject markup into our own alert emails.
+function esc(value) {
+    return String(value == null ? "" : value)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// Internal alert to the company whenever a booking is made, cancelled
+// or refunded — event is "new" | "cancelled" | "refunded".
+async function sendAdminBookingAlertEmail(to, { booking, event }) {
+    const isParcel = booking.type === "parcel";
+    const route = booking.from_city && booking.to_city ? `${booking.from_city} → ${booking.to_city}` : "";
+    const amount = `₦${(Number(booking.price_kobo || 0) / 100).toLocaleString("en-NG")}`;
+
+    const bookedOn = new Intl.DateTimeFormat("en-GB", {
+        timeZone: "Africa/Lagos", day: "numeric", month: "short", year: "numeric",
+        hour: "2-digit", minute: "2-digit"
+    }).format(new Date(booking.created_at));
+
+    const tripDate = booking.travel_date
+        ? new Date(`${booking.travel_date}T00:00:00Z`).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })
+        : "";
+
+    const headings = {
+        new: isParcel ? "NEW PARCEL BOOKING" : "NEW PASSENGER BOOKING",
+        cancelled: "BOOKING CANCELLED",
+        refunded: "BOOKING REFUNDED"
+    };
+    const icons = { new: isParcel ? "📦" : "🎫", cancelled: "❌", refunded: "💸" };
+    const accent = event === "new" ? "#0891a8" : "#b45309";
+    const accentBg = event === "new" ? "#e6f7fa" : "#fef3c7";
+
+    const rows = [];
+    const add = (label, value) => {
+        if (value === undefined || value === null || value === "") return;
+        rows.push(`<tr><td style="padding:12px 20px; border-bottom:1px solid #e7edf3;"><p style="margin:0; color:#64748b; font-size:12px;">${esc(label)}</p><p style="margin:2px 0 0; color:#0f172a; font-size:15px; font-weight:bold;">${esc(value)}</p></td></tr>`);
+    };
+
+    add("Reference", booking.reference);
+    add("Route", route);
+    if (isParcel) {
+        add("Sender", booking.sender_name);
+        add("Sender phone", booking.sender_phone);
+        add("Sender email", booking.sender_email);
+        add("Recipient", booking.receiver_name);
+        add("Recipient phone", booking.receiver_phone);
+        add("Parcel", booking.description);
+        add("Weight", booking.weight_kg ? `${booking.weight_kg} kg` : "");
+        add("Declared value", booking.declared_value_kobo ? `₦${(Number(booking.declared_value_kobo) / 100).toLocaleString("en-NG")}` : "");
+    } else {
+        add("Passenger", booking.passenger_name);
+        add("Phone", booking.passenger_phone);
+        add("Email", booking.passenger_email);
+        add("Trip date", tripDate);
+        add("Departure time", booking.departure_time ? booking.departure_time.slice(0, 5) : "");
+        add("Seat(s)", booking.seat_numbers);
+        add("Pickup center", booking.terminal_name);
+    }
+    add("Amount", amount);
+    add("Status", booking.status);
+    add("Booked on", bookedOn);
+
+    const who = isParcel ? booking.sender_name : booking.passenger_name;
+
+    const html = wrapper(`
+<tr><td style="padding:32px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td style="background-color:${accentBg}; border-radius:12px; padding:20px 24px;">
+<p style="margin:0; color:${accent}; font-size:14px; font-weight:bold; letter-spacing:.5px;">${headings[event]}</p>
+<p style="margin:8px 0 0; color:#0f172a; font-size:18px; font-weight:bold;">${esc(who)} · ${esc(route)}</p>
+</td></tr></table>
+</td></tr>
+<tr><td style="padding:0 32px 20px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e7edf3; border-radius:12px;">
+${rows.join("\n")}
+</table>
+</td></tr>
+<tr><td style="padding:0 32px 28px;" align="center">
+<table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="background-color:#08b6d6; border-radius:50px;">
+<a href="${SITE_URL}/admin-bookings.html" style="display:inline-block; padding:14px 32px; color:#ffffff; font-size:14px; font-weight:bold; text-decoration:none;">Open Admin Bookings</a>
+</td></tr></table>
+</td></tr>
+    `);
+
+    const subjectBits = [route, tripDate && !isParcel ? booking.travel_date : "", booking.reference].filter(Boolean).join(" · ");
+    const prefix = { new: "New booking", cancelled: "Cancelled", refunded: "Refunded" }[event];
+
+    return send(to, `${icons[event]} ${prefix}: ${subjectBits}`, html);
+}
+
 module.exports = {
     sendVerificationEmail,
     sendPassengerReceiptEmail,
@@ -376,5 +467,6 @@ module.exports = {
     sendChatReplyEmail,
     sendCancellationEmail,
     sendRefundEmail,
-    sendPasswordResetEmail
+    sendPasswordResetEmail,
+    sendAdminBookingAlertEmail
 };
